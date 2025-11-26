@@ -36,6 +36,9 @@ def parse_count(value):
 def get_naver_keyword_stats(keyword):
     """네이버 검색광고 API 호출"""
     
+    # 띄어쓰기 제거
+    keyword = keyword.replace(" ", "")
+    
     if not NAVER_API_KEY or not NAVER_SECRET_KEY or not NAVER_CUSTOMER_ID:
         return {"success": False, "error": "API 키가 설정되지 않았습니다."}
     
