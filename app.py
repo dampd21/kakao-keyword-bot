@@ -683,6 +683,7 @@ def kakao_skill():
         elif lower_input.startswith("연관 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
             if keyword:
+                keyword = keyword.replace(" ", "")  # 띄어쓰기 제거
                 response_text = get_related_keywords(keyword)
             else:
                 response_text = "❌ 키워드를 입력해주세요\n예) 연관 맛집"
@@ -691,6 +692,7 @@ def kakao_skill():
         elif lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
             if keyword:
+                keyword = keyword.replace(" ", "")  # 띄어쓰기 제거
                 response_text = get_ad_cost(keyword)
             else:
                 response_text = "❌ 키워드를 입력해주세요\n예) 광고 맛집"
@@ -699,6 +701,7 @@ def kakao_skill():
         elif lower_input.startswith("블로그 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
             if keyword:
+                keyword = keyword.replace(" ", "")  # 띄어쓰기 제거
                 response_text = get_blog_titles(keyword)
             else:
                 response_text = "❌ 키워드를 입력해주세요\n예) 블로그 맛집"
