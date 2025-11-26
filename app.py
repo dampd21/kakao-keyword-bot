@@ -761,7 +761,7 @@ def get_lotto_fallback():
 
 """
     
-    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+    emojis = ["[A]", "[B]", "[C]", "[D]", "[E]"]
     
     for i, emoji in enumerate(emojis):
         numbers = random.sample(range(1, 46), 6)
