@@ -5,6 +5,7 @@ import base64
 import time
 import requests
 import os
+import urllib.parse
 
 app = Flask(__name__)
 
@@ -33,15 +34,14 @@ def parse_count(value):
     return 0
 
 def get_naver_keyword_stats(keyword):
-    """네이버 검색광고 API 호출 - POST 방식"""
+    """네이버 검색광고 API 호출"""
     
     if not NAVER_API_KEY or not NAVER_SECRET_KEY or not NAVER_CUSTOMER_ID:
         return {"success": False, "error": "API 키가 설정되지 않았습니다."}
     
-    # API 설정
+    # API 설정 (공식 문서 기준)
     base_url = "https://api.searchad.naver.com"
     uri = "/keywordstool"
-    url = base_url + uri
     method = "GET"
     
     # 타임스탬프
@@ -64,14 +64,24 @@ def get_naver_keyword_stats(keyword):
         "X-Signature": signature_base64
     }
     
-    # 파라미터
+    # 파라미터 - siteId 추가
     params = {
         "hintKeywords": keyword,
         "showDetail": "1"
     }
     
+    # 전체 URL
+    full_url = base_url + uri
+    
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(full_url, headers=headers, params=params, timeout=10)
+        
+        # 디버그 정보
+        debug_info = f"""
+        Status: {response.status_code}
+        URL: {response.url}
+        Response: {response.text[:500]}
+        """
         
         if response.status_code == 200:
             data = response.json()
@@ -93,20 +103,26 @@ def get_naver_keyword_stats(keyword):
             else:
                 return {"success": False, "error": "검색 결과가 없습니다."}
         else:
-            # 상세 에러 확인
-            try:
-                error_detail = response.json()
-                error_msg = error_detail.get("message", response.text)
-            except:
-                error_msg = response.text
-            return {"success": False, "error": f"API 오류 ({response.status_code}): {error_msg}"}
+            return {"success": False, "error": f"코드 {response.status_code}: {response.text}"}
             
     except Exception as e:
-        return {"success": False, "error": f"오류: {str(e)}"}
+        return {"success": False, "error": f"예외 발생: {str(e)}"}
 
 @app.route('/')
 def home():
-    return "✅ 키워드 조회 봇 서버가 정상 작동 중입니다!"
+    # 환경변수 확인 (앞 4자리만 표시)
+    api_key_preview = NAVER_API_KEY[:4] + "..." if NAVER_API_KEY else "없음"
+    secret_preview = NAVER_SECRET_KEY[:4] + "..." if NAVER_SECRET_KEY else "없음"
+    customer_id = NAVER_CUSTOMER_ID if NAVER_CUSTOMER_ID else "없음"
+    
+    return f"""
+    ✅ 서버 정상 작동 중!<br><br>
+    환경변수 확인:<br>
+    - API_KEY: {api_key_preview}<br>
+    - SECRET_KEY: {secret_preview}<br>
+    - CUSTOMER_ID: {customer_id}<br><br>
+    <a href="/test?keyword=맛집">테스트하기</a>
+    """
 
 @app.route('/test')
 def test():
@@ -116,7 +132,7 @@ def test():
     if result["success"]:
         return f"""
         <h2>🔍 "{result['keyword']}" 검색량</h2>
-        <p>📊 월간 총 검색량: {format_number(result['total'])}회</p>
+        <p>📊 월간 총: {format_number(result['total'])}회</p>
         <p>📱 모바일: {format_number(result['mobile'])}회</p>
         <p>💻 PC: {format_number(result['pc'])}회</p>
         <p>📈 경쟁도: {result['competition']}</p>
@@ -124,7 +140,7 @@ def test():
     else:
         return f"""
         <h2>❌ 조회 실패</h2>
-        <p>{result['error']}</p>
+        <p style="color:red; white-space:pre-wrap;">{result['error']}</p>
         """
 
 @app.route('/skill', methods=['POST'])
