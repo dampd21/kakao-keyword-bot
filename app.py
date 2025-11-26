@@ -708,7 +708,8 @@ def kakao_skill():
         
         # 기본: 검색량 조회
         else:
-            response_text = get_search_volume(user_utterance)
+            keyword = user_utterance.replace(" ", "")  # 띄어쓰기 제거
+            response_text = get_search_volume(keyword)
         
         return create_kakao_response(response_text)
         
