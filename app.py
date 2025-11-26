@@ -165,7 +165,7 @@ def get_related_keywords(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 조회
+# 기능 3: 광고 단가 조회 (실제 시장 기준)
 #############################################
 def get_ad_cost(keyword):
     """광고 단가 정보 조회"""
@@ -192,61 +192,66 @@ def get_ad_cost(keyword):
     mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
     total_qc = pc_qc + mobile_qc
     
-    # 예상 CPC 계산
-    base_cpc = 1000
-    
-    # 경쟁도 배수
+    # 경쟁도별 기본 단가 설정 (실제 시장 기준)
     if comp == "높음":
-        comp_multiplier = 3.0
+        # 5,000원 ~ 20,000원+
+        base_cpc_min = 5000
+        base_cpc_max = 20000
         comp_emoji = "🔴"
         difficulty = "진입 어려움"
         tip = "💡 롱테일 키워드 공략 추천"
     elif comp == "중간":
-        comp_multiplier = 1.5
+        # 500원 ~ 5,000원
+        base_cpc_min = 500
+        base_cpc_max = 5000
         comp_emoji = "🟡"
         difficulty = "보통"
         tip = "💡 틈새 키워드 발굴 추천"
     else:
-        comp_multiplier = 1.0
+        # 100원 ~ 1,000원
+        base_cpc_min = 100
+        base_cpc_max = 1000
         comp_emoji = "🟢"
         difficulty = "진입 쉬움"
         tip = "💡 적극 공략 추천!"
     
-    # 검색량 배수
+    # 검색량에 따른 조정 (검색량 많으면 단가 높음)
     if total_qc > 500000:
-        volume_multiplier = 2.5
-    elif total_qc > 100000:
-        volume_multiplier = 2.0
-    elif total_qc > 50000:
         volume_multiplier = 1.5
-    elif total_qc > 10000:
+    elif total_qc > 100000:
+        volume_multiplier = 1.3
+    elif total_qc > 50000:
         volume_multiplier = 1.2
+    elif total_qc > 10000:
+        volume_multiplier = 1.1
     else:
         volume_multiplier = 1.0
     
-    # 광고수 배수
+    # 광고수에 따른 조정 (광고 많으면 경쟁 심함)
     if ad_count >= 15:
-        ad_multiplier = 1.5
+        ad_multiplier = 1.4
     elif ad_count >= 10:
-        ad_multiplier = 1.3
+        ad_multiplier = 1.2
     elif ad_count >= 5:
         ad_multiplier = 1.1
     else:
         ad_multiplier = 1.0
     
     # 최종 예상 CPC 계산
-    estimated_cpc_min = int(base_cpc * comp_multiplier * volume_multiplier * 0.7)
-    estimated_cpc_max = int(base_cpc * comp_multiplier * volume_multiplier * ad_multiplier * 1.5)
+    estimated_cpc_min = int(base_cpc_min * volume_multiplier)
+    estimated_cpc_max = int(base_cpc_max * volume_multiplier * ad_multiplier)
     
-    # 최소/최대 범위 조정
-    estimated_cpc_min = max(50, estimated_cpc_min)
-    estimated_cpc_max = min(5000, estimated_cpc_max)
+    # 범위 제한
+    estimated_cpc_min = max(100, estimated_cpc_min)
+    estimated_cpc_max = min(50000, estimated_cpc_max)
     
     # 월 예상 광고비 계산
     if total_click > 0:
         monthly_cost_min = int(total_click * estimated_cpc_min)
         monthly_cost_max = int(total_click * estimated_cpc_max)
-        monthly_cost_str = f"{format_number(monthly_cost_min)}원 ~ {format_number(monthly_cost_max)}원"
+        
+        # 단위 변환 (억, 만원)
+        monthly_cost_str = format_cost_range(monthly_cost_min, monthly_cost_max)
     else:
         monthly_cost_str = "데이터 부족"
     
@@ -276,6 +281,21 @@ def get_ad_cost(keyword):
 {tip}
 
 ⚠️ 실제 단가는 입찰 경쟁에 따라 달라집니다."""
+
+
+def format_cost_range(min_cost, max_cost):
+    """광고비를 읽기 쉽게 포맷"""
+    def format_won(value):
+        if value >= 100000000:  # 1억 이상
+            return f"{value / 100000000:.1f}억원"
+        elif value >= 10000000:  # 1천만원 이상
+            return f"{value / 10000:.0f}만원"
+        elif value >= 1000000:  # 100만원 이상
+            return f"{value / 10000:.0f}만원"
+        else:
+            return f"{format_number(value)}원"
+    
+    return f"{format_won(min_cost)} ~ {format_won(max_cost)}"
 
 
 #############################################
