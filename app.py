@@ -193,7 +193,7 @@ def get_ad_cost(keyword):
     total_qc = pc_qc + mobile_qc
     
     # 예상 CPC 계산
-    base_cpc = 100
+    base_cpc = 1000
     
     # 경쟁도 배수
     if comp == "높음":
