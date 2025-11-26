@@ -111,16 +111,6 @@ def get_naver_keyword_stats(keyword):
     except Exception as e:
         return {"success": False, "error": f"예외 발생: {str(e)}"}
 
-# 헬스체크 엔드포인트 (UptimeRobot용)
-@app.route('/health')
-def health():
-    return jsonify({"status": "ok", "timestamp": int(time.time())}), 200
-
-# 간단한 핑 엔드포인트
-@app.route('/ping')
-def ping():
-    return "pong", 200
-
 @app.route('/')
 def home():
     # 환경변수 확인 (앞 4자리만 표시)
@@ -134,8 +124,7 @@ def home():
     - API_KEY: {api_key_preview}<br>
     - SECRET_KEY: {secret_preview}<br>
     - CUSTOMER_ID: {customer_id}<br><br>
-    <a href="/test?keyword=맛집">테스트하기</a><br>
-    <a href="/health">헬스체크</a>
+    <a href="/test?keyword=맛집">테스트하기</a>
     """
 
 @app.route('/test')
