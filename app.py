@@ -6,6 +6,7 @@ import time
 import requests
 import os
 import random
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -194,28 +195,25 @@ def get_ad_cost(keyword):
     
     # 경쟁도별 기본 단가 설정 (실제 시장 기준)
     if comp == "높음":
-        # 5,000원 ~ 20,000원+
         base_cpc_min = 5000
         base_cpc_max = 20000
         comp_emoji = "🔴"
         difficulty = "진입 어려움"
         tip = "💡 롱테일 키워드 공략 추천"
     elif comp == "중간":
-        # 500원 ~ 5,000원
         base_cpc_min = 500
         base_cpc_max = 5000
         comp_emoji = "🟡"
         difficulty = "보통"
         tip = "💡 틈새 키워드 발굴 추천"
     else:
-        # 100원 ~ 1,000원
         base_cpc_min = 100
         base_cpc_max = 1000
         comp_emoji = "🟢"
         difficulty = "진입 쉬움"
         tip = "💡 적극 공략 추천!"
     
-    # 검색량에 따른 조정 (검색량 많으면 단가 높음)
+    # 검색량에 따른 조정
     if total_qc > 500000:
         volume_multiplier = 1.5
     elif total_qc > 100000:
@@ -227,7 +225,7 @@ def get_ad_cost(keyword):
     else:
         volume_multiplier = 1.0
     
-    # 광고수에 따른 조정 (광고 많으면 경쟁 심함)
+    # 광고수에 따른 조정
     if ad_count >= 15:
         ad_multiplier = 1.4
     elif ad_count >= 10:
@@ -249,8 +247,6 @@ def get_ad_cost(keyword):
     if total_click > 0:
         monthly_cost_min = int(total_click * estimated_cpc_min)
         monthly_cost_max = int(total_click * estimated_cpc_max)
-        
-        # 단위 변환 (억, 만원)
         monthly_cost_str = format_cost_range(monthly_cost_min, monthly_cost_max)
     else:
         monthly_cost_str = "데이터 부족"
@@ -286,11 +282,11 @@ def get_ad_cost(keyword):
 def format_cost_range(min_cost, max_cost):
     """광고비를 읽기 쉽게 포맷"""
     def format_won(value):
-        if value >= 100000000:  # 1억 이상
+        if value >= 100000000:
             return f"{value / 100000000:.1f}억원"
-        elif value >= 10000000:  # 1천만원 이상
+        elif value >= 10000000:
             return f"{value / 10000:.0f}만원"
-        elif value >= 1000000:  # 100만원 이상
+        elif value >= 1000000:
             return f"{value / 10000:.0f}만원"
         else:
             return f"{format_number(value)}원"
@@ -383,20 +379,157 @@ def get_blog_topics_fallback(keyword):
 
 
 #############################################
-# 기능 5: 오늘의 운세 (Gemini)
+# 기능 5: 오늘의 운세 (Gemini) - 생년월일 기반
 #############################################
-def get_fortune():
-    """Gemini로 오늘의 운세 생성"""
+def parse_birthday(birthday_str):
+    """생년월일 파싱 (YYMMDD 또는 YYYYMMDD)"""
+    birthday_str = birthday_str.strip().replace("-", "").replace(".", "").replace("/", "")
+    
+    if len(birthday_str) == 6:
+        # YYMMDD 형식
+        year = int(birthday_str[:2])
+        month = int(birthday_str[2:4])
+        day = int(birthday_str[4:6])
+        
+        # 년도 보정 (00~29는 2000년대, 30~99는 1900년대)
+        if year <= 29:
+            year += 2000
+        else:
+            year += 1900
+            
+    elif len(birthday_str) == 8:
+        # YYYYMMDD 형식
+        year = int(birthday_str[:4])
+        month = int(birthday_str[4:6])
+        day = int(birthday_str[6:8])
+    else:
+        return None
+    
+    # 유효성 검사
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    if year < 1920 or year > 2020:
+        return None
+        
+    return {"year": year, "month": month, "day": day}
+
+
+def get_zodiac_sign(month, day):
+    """별자리 계산"""
+    zodiac = [
+        (1, 20, "염소자리", "♑"), (2, 19, "물병자리", "♒"), (3, 20, "물고기자리", "♓"),
+        (4, 20, "양자리", "♈"), (5, 21, "황소자리", "♉"), (6, 21, "쌍둥이자리", "♊"),
+        (7, 22, "게자리", "♋"), (8, 23, "사자자리", "♌"), (9, 23, "처녀자리", "♍"),
+        (10, 23, "천칭자리", "♎"), (11, 22, "전갈자리", "♏"), (12, 22, "사수자리", "♐"),
+        (12, 31, "염소자리", "♑")
+    ]
+    
+    for end_month, end_day, sign, symbol in zodiac:
+        if (month < end_month) or (month == end_month and day <= end_day):
+            return sign, symbol
+    
+    return "염소자리", "♑"
+
+
+def get_chinese_zodiac(year):
+    """띠 계산"""
+    zodiacs = [
+        ("원숭이", "🐵"), ("닭", "🐔"), ("개", "🐶"), ("돼지", "🐷"),
+        ("쥐", "🐭"), ("소", "🐮"), ("호랑이", "🐯"), ("토끼", "🐰"),
+        ("용", "🐲"), ("뱀", "🐍"), ("말", "🐴"), ("양", "🐑")
+    ]
+    return zodiacs[year % 12]
+
+
+def calculate_age(year):
+    """나이 계산 (한국 나이)"""
+    current_year = datetime.now().year
+    return current_year - year + 1
+
+
+def get_fortune(birthday_str=None):
+    """생년월일 기반 오늘의 운세 생성"""
+    
+    # 생년월일 파싱
+    if birthday_str:
+        birthday = parse_birthday(birthday_str)
+        if not birthday:
+            return """❌ 생년월일 형식이 올바르지 않습니다.
+
+📝 올바른 형식:
+• 운세 860214 (YYMMDD)
+• 운세 19860214 (YYYYMMDD)
+
+예) 운세 901225"""
+    else:
+        birthday = None
+    
+    # 생년월일 정보 구성
+    if birthday:
+        zodiac_sign, zodiac_symbol = get_zodiac_sign(birthday["month"], birthday["day"])
+        chinese_zodiac, chinese_emoji = get_chinese_zodiac(birthday["year"])
+        age = calculate_age(birthday["year"])
+        today = datetime.now().strftime("%Y년 %m월 %d일")
+        
+        birth_info = f"""생년월일: {birthday["year"]}년 {birthday["month"]}월 {birthday["day"]}일
+나이: {age}세
+별자리: {zodiac_symbol} {zodiac_sign}
+띠: {chinese_emoji} {chinese_zodiac}띠
+오늘 날짜: {today}"""
+    else:
+        birth_info = None
+        zodiac_sign = None
+        zodiac_symbol = None
+        chinese_zodiac = None
+        chinese_emoji = None
     
     if not GEMINI_API_KEY:
-        # Gemini 없으면 기본 운세
-        return get_fortune_fallback()
+        return get_fortune_fallback(birthday)
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     headers = {"Content-Type": "application/json"}
     
-    prompt = """오늘의 운세를 재미있고 긍정적으로 알려줘.
+    if birthday:
+        prompt = f"""다음 사람의 오늘 운세를 자세하고 구체적으로 알려줘.
+
+{birth_info}
+
+이 사람의 별자리({zodiac_sign})와 띠({chinese_zodiac}띠)의 특성을 고려해서,
+오늘 날짜의 운세를 구체적이고 개인화된 느낌으로 작성해줘.
+
+다음 형식으로 작성해줘:
+
+🔮 {birthday["year"]}년 {birthday["month"]}월 {birthday["day"]}일생 오늘의 운세
+
+{zodiac_symbol} {zodiac_sign} | {chinese_emoji} {chinese_zodiac}띠
+
+✨ 총운 (상/중/하 중 택1)
+(3줄 이내, 구체적인 조언 포함)
+
+💕 애정운
+(2줄 이내, 구체적)
+
+💰 금전운
+(2줄 이내, 구체적)
+
+💼 직장/학업운
+(2줄 이내, 구체적)
+
+⚠️ 오늘 주의할 점
+(1줄)
+
+🍀 행운의 숫자: (1-45 사이 숫자 3개, 생년월일과 연관지어)
+🎨 행운의 색: (색상 1개)
+⏰ 행운의 시간: (시간대)
+
+💬 오늘의 조언
+"(별자리/띠 특성에 맞는 맞춤 조언)"
+
+이모지를 적절히 사용하고, 긍정적이면서도 현실적인 조언을 해줘."""
+
+    else:
+        prompt = """오늘의 운세를 재미있고 긍정적으로 알려줘.
 
 다음 형식으로 작성해줘:
 
@@ -420,13 +553,17 @@ def get_fortune():
 💬 오늘의 한마디
 "(짧은 격언이나 응원 메시지)"
 
+━━━━━━━━━━━━━━━━
+💡 TIP: "운세 생년월일" 입력시 맞춤 운세!
+예) 운세 860214
+
 이모지를 적절히 사용하고, 전체 15줄 이내로 작성해줘."""
 
     data = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.9,
-            "maxOutputTokens": 500
+            "maxOutputTokens": 800
         }
     }
     
@@ -438,41 +575,105 @@ def get_fortune():
             text = result["candidates"][0]["content"]["parts"][0]["text"]
             return text
         else:
-            return get_fortune_fallback()
+            return get_fortune_fallback(birthday)
             
     except Exception as e:
-        return get_fortune_fallback()
+        return get_fortune_fallback(birthday)
 
-def get_fortune_fallback():
+
+def get_fortune_fallback(birthday=None):
     """Gemini 없을 때 기본 운세"""
     
+    today = datetime.now()
+    
+    if birthday:
+        zodiac_sign, zodiac_symbol = get_zodiac_sign(birthday["month"], birthday["day"])
+        chinese_zodiac, chinese_emoji = get_chinese_zodiac(birthday["year"])
+        age = calculate_age(birthday["year"])
+        
+        # 생년월일 + 오늘 날짜 기반 시드 (같은 날 같은 생일은 같은 운세)
+        seed = birthday["year"] * 10000 + birthday["month"] * 100 + birthday["day"]
+        seed += today.year * 10000 + today.month * 100 + today.day
+        random.seed(seed)
+        
+        header = f"""🔮 {birthday["year"]}년 {birthday["month"]}월 {birthday["day"]}일생
+   오늘의 운세
+
+{zodiac_symbol} {zodiac_sign} | {chinese_emoji} {chinese_zodiac}띠 | {age}세
+
+"""
+    else:
+        random.seed()
+        header = """🔮 오늘의 운세
+
+"""
+    
+    # 운세 등급
+    grades = ["상", "중상", "중", "중하"]
+    grade = random.choice(grades)
+    
     fortunes = [
-        "오늘은 새로운 기회가 찾아오는 날!",
+        "오늘은 새로운 기회가 찾아오는 날입니다.",
         "좋은 소식이 들려올 예정이에요.",
-        "작은 행운이 당신을 따라다녀요.",
+        "작은 행운이 당신을 따라다닐 거예요.",
         "긍정적인 에너지가 가득한 하루!",
-        "뜻밖의 만남이 행운을 가져다줄 거예요."
+        "뜻밖의 만남이 행운을 가져다줄 수 있어요.",
+        "차분하게 하루를 보내면 좋은 결과가 있을 거예요.",
+        "적극적으로 행동하면 원하는 것을 얻을 수 있어요."
     ]
     
-    love = ["설레는 만남이 있을 수 있어요 💕", "소중한 사람과 대화를 나눠보세요", "사랑이 피어나는 하루"]
-    money = ["작은 횡재수가 있어요 💰", "절약이 미덕인 날", "투자보다는 저축을 추천"]
-    work = ["집중력이 높아지는 시간 💼", "새 프로젝트에 도전해보세요", "동료와의 협업이 좋아요"]
+    love = [
+        "설레는 만남이 있을 수 있어요 💕", 
+        "소중한 사람과 대화를 나눠보세요", 
+        "사랑이 피어나는 하루",
+        "상대방의 마음을 이해하는 시간을 가져보세요",
+        "진심을 표현하면 좋은 반응이 있을 거예요"
+    ]
     
-    lucky_numbers = random.sample(range(1, 46), 3)
-    lucky_numbers.sort()
-    colors = ["빨간색", "파란색", "노란색", "초록색", "보라색", "주황색", "분홍색"]
+    money = [
+        "작은 횡재수가 있어요 💰", 
+        "절약이 미덕인 날", 
+        "투자보다는 저축을 추천",
+        "예상치 못한 수입이 생길 수 있어요",
+        "충동구매는 자제하세요"
+    ]
+    
+    work = [
+        "집중력이 높아지는 시간 💼", 
+        "새 프로젝트에 도전해보세요", 
+        "동료와의 협업이 좋아요",
+        "꾸준한 노력이 빛을 발하는 날",
+        "중요한 결정은 오후에 하세요"
+    ]
+    
+    # 생년월일 기반 행운의 숫자
+    if birthday:
+        base_nums = [birthday["day"], birthday["month"], (birthday["year"] % 45) + 1]
+        lucky_numbers = []
+        for n in base_nums:
+            adjusted = ((n + today.day) % 45) + 1
+            while adjusted in lucky_numbers:
+                adjusted = (adjusted % 45) + 1
+            lucky_numbers.append(adjusted)
+        lucky_numbers.sort()
+    else:
+        lucky_numbers = random.sample(range(1, 46), 3)
+        lucky_numbers.sort()
+    
+    colors = ["빨간색", "파란색", "노란색", "초록색", "보라색", "주황색", "분홍색", "하늘색", "금색"]
+    times = ["오전 9-11시", "오후 12-2시", "오후 3-5시", "저녁 6-8시"]
     
     quotes = [
         "오늘 하루도 화이팅! 💪",
         "웃으면 복이 와요 😊",
         "당신은 할 수 있어요!",
         "좋은 일이 생길 거예요 ✨",
-        "포기하지 마세요, 거의 다 왔어요!"
+        "포기하지 마세요, 거의 다 왔어요!",
+        "작은 것에 감사하는 하루 되세요",
+        "당신의 노력은 빛날 거예요"
     ]
     
-    return f"""🔮 오늘의 운세
-
-✨ 총운
+    result = header + f"""✨ 총운: {grade}
 {random.choice(fortunes)}
 
 💕 애정운: {random.choice(love)}
@@ -481,10 +682,18 @@ def get_fortune_fallback():
 
 🍀 행운의 숫자: {lucky_numbers[0]}, {lucky_numbers[1]}, {lucky_numbers[2]}
 🎨 행운의 색: {random.choice(colors)}
+⏰ 행운의 시간: {random.choice(times)}
 
 ━━━━━━━━━━━━━━━━
 💬 "{random.choice(quotes)}"
 """
+    
+    if not birthday:
+        result += """
+💡 TIP: "운세 생년월일" 입력시 맞춤 운세!
+예) 운세 860214"""
+    
+    return result
 
 
 #############################################
@@ -544,6 +753,7 @@ def get_lotto():
     except Exception as e:
         return get_lotto_fallback()
 
+
 def get_lotto_fallback():
     """Gemini 없을 때 기본 로또 번호 생성"""
     
@@ -551,7 +761,7 @@ def get_lotto_fallback():
 
 """
     
-    emojis = ["[A]", "[B]", "[C]", "[D]", "[E]"]
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
     
     for i, emoji in enumerate(emojis):
         numbers = random.sample(range(1, 46), 6)
@@ -562,7 +772,7 @@ def get_lotto_fallback():
     messages = [
         "이번 주는 당신 차례!",
         "대박을 기원합니다!",
-        "당첨되시면 저도 생각해주세요",
+        "당첨되시면 저도 생각해주세요 😄",
         "행운이 따르길!",
         "부자 되세요!"
     ]
@@ -571,7 +781,7 @@ def get_lotto_fallback():
 ━━━━━━━━━━━━━━━━
 🍀 {random.choice(messages)}
 
-⚠️ 로또 무조건 1등 맞자! 가즈아!
+⚠️ 로또는 재미로만 즐겨주세요!"""
     
     return result
 
@@ -607,7 +817,9 @@ def get_help():
 ━━━━━━━━━━━━━━━━
 
 🔮 오늘의 운세
-👉 "운세" 입력
+👉 "운세" (일반 운세)
+👉 "운세 860214" (맞춤 운세)
+   생년월일 6자리로 맞춤 운세!
 
 🎰 로또 번호 추천
 👉 "로또" 입력
@@ -671,8 +883,18 @@ def kakao_skill():
         if lower_input in ["도움말", "도움", "사용법", "help", "?", "메뉴"]:
             response_text = get_help()
         
-        # 운세
-        elif lower_input in ["운세", "오늘의운세", "오늘운세", "오늘의 운세", "fortune"]:
+        # 운세 (생년월일 포함 가능)
+        elif lower_input.startswith("운세"):
+            parts = user_utterance.split()
+            if len(parts) >= 2:
+                # "운세 860214" 형태
+                birthday_str = parts[1]
+                response_text = get_fortune(birthday_str)
+            else:
+                # "운세"만 입력
+                response_text = get_fortune()
+        
+        elif lower_input in ["오늘의운세", "오늘운세", "오늘의 운세", "fortune"]:
             response_text = get_fortune()
         
         # 로또
@@ -680,35 +902,38 @@ def kakao_skill():
             response_text = get_lotto()
         
         # 연관 키워드
-        elif lower_input.startswith("연관 "):
-            keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
+        elif lower_input.startswith("연관 ") or lower_input.startswith("연관키워드 "):
+            parts = user_utterance.split(" ", 1)
+            keyword = parts[1] if len(parts) > 1 else ""
             if keyword:
-                keyword = keyword.replace(" ", "")  # 띄어쓰기 제거
+                keyword = keyword.replace(" ", "")
                 response_text = get_related_keywords(keyword)
             else:
                 response_text = "❌ 키워드를 입력해주세요\n예) 연관 맛집"
         
         # 광고 단가
-        elif lower_input.startswith("광고 "):
-            keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
+        elif lower_input.startswith("광고 ") or lower_input.startswith("광고단가 "):
+            parts = user_utterance.split(" ", 1)
+            keyword = parts[1] if len(parts) > 1 else ""
             if keyword:
-                keyword = keyword.replace(" ", "")  # 띄어쓰기 제거
+                keyword = keyword.replace(" ", "")
                 response_text = get_ad_cost(keyword)
             else:
                 response_text = "❌ 키워드를 입력해주세요\n예) 광고 맛집"
         
         # 블로그 상위글
         elif lower_input.startswith("블로그 "):
-            keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
+            parts = user_utterance.split(" ", 1)
+            keyword = parts[1] if len(parts) > 1 else ""
             if keyword:
-                keyword = keyword.replace(" ", "")  # 띄어쓰기 제거
+                keyword = keyword.replace(" ", "")
                 response_text = get_blog_titles(keyword)
             else:
                 response_text = "❌ 키워드를 입력해주세요\n예) 블로그 맛집"
         
         # 기본: 검색량 조회
         else:
-            keyword = user_utterance.replace(" ", "")  # 띄어쓰기 제거
+            keyword = user_utterance.replace(" ", "")
             response_text = get_search_volume(keyword)
         
         return create_kakao_response(response_text)
