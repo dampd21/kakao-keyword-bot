@@ -8,10 +8,14 @@ import os
 
 app = Flask(__name__)
 
-# 환경변수
+# 검색광고 API 환경변수
 NAVER_API_KEY = os.environ.get('NAVER_API_KEY', '')
 NAVER_SECRET_KEY = os.environ.get('NAVER_SECRET_KEY', '')
 NAVER_CUSTOMER_ID = os.environ.get('NAVER_CUSTOMER_ID', '')
+
+# 검색 API 환경변수 (블로그 검색용)
+NAVER_CLIENT_ID = os.environ.get('NAVER_CLIENT_ID', '')
+NAVER_CLIENT_SECRET = os.environ.get('NAVER_CLIENT_SECRET', '')
 
 def format_number(num):
     if isinstance(num, int):
@@ -33,7 +37,7 @@ def parse_count(value):
     return 0
 
 def get_naver_api_headers():
-    """네이버 API 헤더 생성"""
+    """검색광고 API 헤더 생성"""
     timestamp = str(int(time.time() * 1000))
     method = "GET"
     uri = "/keywordstool"
@@ -54,7 +58,7 @@ def get_naver_api_headers():
     }
 
 def get_keyword_data(keyword):
-    """네이버 API에서 키워드 데이터 전체 가져오기"""
+    """키워드 검색량 데이터 가져오기"""
     
     if not NAVER_API_KEY or not NAVER_SECRET_KEY or not NAVER_CUSTOMER_ID:
         return {"success": False, "error": "API 키가 설정되지 않았습니다."}
@@ -109,9 +113,7 @@ def get_search_volume(keyword):
 📈 경쟁도: {comp}
 
 ━━━━━━━━━━━━━━━━
-💡 연관 키워드: "연관 {keyword}"
-💰 광고 단가: "광고 {keyword}"
-📝 블로그 주제: "블로그 {keyword}" """
+💡 다른 명령어: "도움말" 입력"""
 
 #############################################
 # 기능 2: 연관 키워드 조회
@@ -123,22 +125,27 @@ def get_related_keywords(keyword):
     if not result["success"]:
         return f"❌ 조회 실패\n{result['error']}"
     
-    keyword_list = result["data"][:6]  # 최대 6개 (첫번째는 원본)
+    keyword_list = result["data"][:6]
     
-    response = f"""🔗 "{keyword}" 연관 키워드
+    response = f"""🔗 "{keyword}" 연관 키워드 TOP 5
 
 """
     
-    for i, kw in enumerate(keyword_list, 1):
+    for i, kw in enumerate(keyword_list[:5], 1):
         name = kw.get("relKeyword", "")
         pc = parse_count(kw.get("monthlyPcQcCnt"))
         mobile = parse_count(kw.get("monthlyMobileQcCnt"))
         total = pc + mobile
+        comp = kw.get("compIdx", "")
         
-        response += f"{i}. {name}\n   📊 월간 {format_number(total)}회\n\n"
-    
-    response += """━━━━━━━━━━━━━━━━
-💡 상세 검색량: 키워드만 입력"""
+        if comp == "높음":
+            comp_emoji = "🔴"
+        elif comp == "중간":
+            comp_emoji = "🟡"
+        else:
+            comp_emoji = "🟢"
+        
+        response += f"{i}. {name}\n   📊 {format_number(total)}회 {comp_emoji}\n\n"
     
     return response
 
@@ -154,14 +161,10 @@ def get_ad_cost(keyword):
     
     kw = result["data"][0]
     
-    # 광고 관련 데이터 추출
     pc_click = kw.get("monthlyAvePcClkCnt", 0)
     mobile_click = kw.get("monthlyAveMobileClkCnt", 0)
-    pc_ctr = kw.get("monthlyAvePcCtr", 0)
-    mobile_ctr = kw.get("monthlyAveMobileCtr", 0)
     comp = kw.get("compIdx", "정보없음")
     
-    # 경쟁도에 따른 예상 단가 (대략적 추정)
     if comp == "높음":
         estimated_cpc = "500~2,000원"
         difficulty = "🔴 진입 어려움"
@@ -172,10 +175,6 @@ def get_ad_cost(keyword):
         estimated_cpc = "50~200원"
         difficulty = "🟢 진입 쉬움"
     
-    # 클릭률 포맷팅
-    pc_ctr_str = f"{pc_ctr:.2f}%" if isinstance(pc_ctr, (int, float)) else str(pc_ctr)
-    mobile_ctr_str = f"{mobile_ctr:.2f}%" if isinstance(mobile_ctr, (int, float)) else str(mobile_ctr)
-    
     return f"""💰 "{kw.get('relKeyword', keyword)}" 광고 분석
 
 📈 경쟁도: {comp}
@@ -184,112 +183,111 @@ def get_ad_cost(keyword):
 💵 예상 클릭 단가
 {estimated_cpc}
 
-📊 평균 클릭률 (CTR)
-📱 모바일: {mobile_ctr_str}
-💻 PC: {pc_ctr_str}
-
 🖱️ 월평균 클릭수
 📱 모바일: {format_number(int(mobile_click))}회
 💻 PC: {format_number(int(pc_click))}회
 
 ━━━━━━━━━━━━━━━━
-⚠️ 실제 단가는 입찰 상황에 따라 다를 수 있습니다."""
+⚠️ 실제 단가는 입찰에 따라 다를 수 있음"""
 
 #############################################
-# 기능 4: 블로그 주제 추천
+# 기능 4: 블로그 상위 5개 제목 조회
 #############################################
-def get_blog_topics(keyword):
-    """블로그 주제 추천"""
-    result = get_keyword_data(keyword)
+def get_blog_titles(keyword):
+    """네이버 블로그 상위 5개 제목 가져오기"""
     
-    if not result["success"]:
-        return f"❌ 조회 실패\n{result['error']}"
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        return f"""📝 "{keyword}" 블로그 분석
+
+⚠️ 블로그 검색 API가 설정되지 않았습니다.
+
+관리자에게 문의해주세요."""
     
-    keyword_list = result["data"][:10]
+    url = "https://openapi.naver.com/v1/search/blog.json"
     
-    # 검색량 기준 정렬 및 필터링
-    topics = []
-    for kw in keyword_list:
-        name = kw.get("relKeyword", "")
-        pc = parse_count(kw.get("monthlyPcQcCnt"))
-        mobile = parse_count(kw.get("monthlyMobileQcCnt"))
-        total = pc + mobile
-        comp = kw.get("compIdx", "")
+    headers = {
+        "X-Naver-Client-Id": NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
+    }
+    
+    params = {
+        "query": keyword,
+        "display": 5,
+        "sort": "sim"  # 정확도순 (상위노출 기준)
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
         
-        topics.append({
-            "name": name,
-            "total": total,
-            "comp": comp
-        })
-    
-    response = f"""📝 "{keyword}" 블로그 주제 추천
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("items", [])
+            
+            if items:
+                result = f"""📝 "{keyword}" 블로그 상위 5개
 
-🎯 추천 글감 TOP 5
+🏆 현재 상위 노출 제목
 
 """
-    
-    for i, topic in enumerate(topics[:5], 1):
-        # 경쟁도 이모지
-        if topic["comp"] == "높음":
-            comp_emoji = "🔴"
-        elif topic["comp"] == "중간":
-            comp_emoji = "🟡"
+                for i, item in enumerate(items, 1):
+                    # HTML 태그 제거
+                    title = item.get("title", "")
+                    title = title.replace("<b>", "").replace("</b>", "")
+                    
+                    # 블로그명
+                    blogger = item.get("bloggername", "")
+                    
+                    result += f"""{i}. {title}
+   ✍️ {blogger}
+
+"""
+                
+                result += """━━━━━━━━━━━━━━━━
+💡 TIP: 상위 제목 패턴을 분석해보세요!"""
+                
+                return result
+            else:
+                return f"❌ '{keyword}' 블로그 검색 결과가 없습니다."
         else:
-            comp_emoji = "🟢"
-        
-        response += f"""{i}. {topic['name']}
-   📊 {format_number(topic['total'])}회 {comp_emoji}
-
-"""
-    
-    response += """━━━━━━━━━━━━━━━━
-💡 TIP: 🟢 경쟁 낮은 키워드가
-   상위 노출에 유리해요!"""
-    
-    return response
+            return f"❌ 블로그 검색 오류 ({response.status_code})"
+            
+    except Exception as e:
+        return f"❌ 블로그 검색 실패: {str(e)}"
 
 #############################################
 # 도움말
 #############################################
 def get_help():
-    return """📖 키워드 도구 사용법
-
-🔍 검색량 조회
-   → 키워드만 입력
-   예: 맛집
-
-🔗 연관 키워드
-   → "연관" + 키워드
-   예: 연관 맛집
-
-💰 광고 단가
-   → "광고" + 키워드
-   예: 광고 맛집
-
-📝 블로그 주제
-   → "블로그" + 키워드
-   예: 블로그 맛집
+    return """📖 키워드 분석 도구 사용법
 
 ━━━━━━━━━━━━━━━━
-💡 아무 키워드나 입력해보세요!"""
+
+🔍 검색량 조회
+👉 키워드만 입력
+예) 맛집
+
+🔗 연관 키워드
+👉 "연관" + 키워드
+예) 연관 맛집
+
+💰 광고 단가
+👉 "광고" + 키워드
+예) 광고 맛집
+
+📝 블로그 상위글
+👉 "블로그" + 키워드
+예) 블로그 맛집
+
+━━━━━━━━━━━━━━━━
+
+💡 원하는 키워드를 입력해보세요!"""
 
 #############################################
 # 라우트
 #############################################
 @app.route('/')
 def home():
-    api_key_preview = NAVER_API_KEY[:4] + "..." if NAVER_API_KEY else "없음"
-    secret_preview = NAVER_SECRET_KEY[:4] + "..." if NAVER_SECRET_KEY else "없음"
-    customer_id = NAVER_CUSTOMER_ID if NAVER_CUSTOMER_ID else "없음"
-    
-    return f"""
-    ✅ 서버 정상 작동 중!<br><br>
-    환경변수 확인:<br>
-    - API_KEY: {api_key_preview}<br>
-    - SECRET_KEY: {secret_preview}<br>
-    - CUSTOMER_ID: {customer_id}<br><br>
-    <a href="/test?keyword=맛집">테스트하기</a>
-    """
+    return "✅ 서버 정상 작동 중!"
 
 @app.route('/test')
 def test():
@@ -305,7 +303,6 @@ def test():
         <p>📊 월간 총: {format_number(pc + mobile)}회</p>
         <p>📱 모바일: {format_number(mobile)}회</p>
         <p>💻 PC: {format_number(pc)}회</p>
-        <p>📈 경쟁도: {kw.get('compIdx', '정보없음')}</p>
         """
     else:
         return f"<h2>❌ 조회 실패</h2><p>{result['error']}</p>"
@@ -329,32 +326,32 @@ def kakao_skill():
         lower_input = user_utterance.lower()
         
         # 도움말
-        if lower_input in ["도움말", "도움", "사용법", "help", "?"]:
+        if lower_input in ["도움말", "도움", "사용법", "help", "?", "메뉴"]:
             response_text = get_help()
         
         # 연관 키워드
-        elif lower_input.startswith("연관 ") or lower_input.startswith("연관키워드 "):
+        elif lower_input.startswith("연관 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
             if keyword:
                 response_text = get_related_keywords(keyword)
             else:
-                response_text = "❌ 키워드를 입력해주세요\n예: 연관 맛집"
+                response_text = "❌ 키워드를 입력해주세요\n예) 연관 맛집"
         
         # 광고 단가
-        elif lower_input.startswith("광고 ") or lower_input.startswith("광고단가 "):
+        elif lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
             if keyword:
                 response_text = get_ad_cost(keyword)
             else:
-                response_text = "❌ 키워드를 입력해주세요\n예: 광고 맛집"
+                response_text = "❌ 키워드를 입력해주세요\n예) 광고 맛집"
         
-        # 블로그 주제
-        elif lower_input.startswith("블로그 ") or lower_input.startswith("블로그주제 "):
+        # 블로그 상위글
+        elif lower_input.startswith("블로그 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
             if keyword:
-                response_text = get_blog_topics(keyword)
+                response_text = get_blog_titles(keyword)
             else:
-                response_text = "❌ 키워드를 입력해주세요\n예: 블로그 맛집"
+                response_text = "❌ 키워드를 입력해주세요\n예) 블로그 맛집"
         
         # 기본: 검색량 조회
         else:
