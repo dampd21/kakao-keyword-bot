@@ -341,7 +341,7 @@ def get_position_bids(keyword, device='PC'):
 
 
 def get_ad_cost(keyword):
-    """광고 단가 정보 조회 (순위별 입찰가 × 클릭수 기반)"""
+    """광고 단가 정보 조회"""
     
     # 1. 기본 키워드 정보 조회
     result = get_keyword_data(keyword)
@@ -362,146 +362,85 @@ def get_ad_cost(keyword):
     total_qc = pc_qc + mobile_qc
     
     comp = kw.get("compIdx", "정보없음")
-    ad_count = kw.get("plAvgDepth", 0) or 0
     
     # 경쟁도 이모지
-    comp_emoji = {"높음": "🔴", "중간": "🟡"}.get(comp, "🟢")
+    if comp == "높음":
+        comp_emoji = "🔴"
+    elif comp == "중간":
+        comp_emoji = "🟡"
+    else:
+        comp_emoji = "🟢"
     
-    # 2. 순위별 입찰가 조회 (PC, 모바일 각각)
-    pc_bids = get_position_bids(keyword_name, 'PC')
-    mobile_bids = get_position_bids(keyword_name, 'MOBILE')
+    # 2. CPC API 조회 (노출 최소 입찰가)
+    min_bid_pc = get_exposure_minimum_bid(keyword_name, 'PC')
+    min_bid_mo = get_exposure_minimum_bid(keyword_name, 'MOBILE')
     
-    # 참고용 데이터
-    min_bid = get_exposure_minimum_bid(keyword_name, 'MOBILE')
-    median_bid = get_median_bid(keyword_name, 'MOBILE')
-    
-    # API 성공 여부
-    api_success = (pc_bids and len(pc_bids) > 0) or (mobile_bids and len(mobile_bids) > 0)
+    # 대표 CPC 결정
+    main_cpc = min_bid_mo if min_bid_mo > 0 else min_bid_pc
     
     # 3. 결과 포맷팅
     response = f"""💰 "{keyword_name}" 광고 분석
 
 {comp_emoji} 경쟁도: {comp}
 📊 월간 검색량: {format_number(total_qc)}회
+├ 💻 PC: {format_number(pc_qc)}회
+└ 📱 모바일: {format_number(mobile_qc)}회
 
 ━━━━━━━━━━━━━━━━
 """
     
-    if api_success:
-        # 순위별 입찰 단가 표시
-        response += """
-💵 순위별 입찰 단가 (네이버 API)
+    if main_cpc > 0:
+        response += f"""
+💵 CPC 단가 (네이버 API)
 
-"""
-        medal = {1: '🥇 1위', 2: '🥈 2위', 3: '🥉 3위', 5: '📍 5위'}
-        
-        if pc_bids:
-            response += "💻 PC\n"
-            for pos in sorted(pc_bids.keys()):
-                response += f"├ {medal.get(pos, f'{pos}위')}: {format_number(pc_bids[pos])}원\n"
-            response += "\n"
-        
-        if mobile_bids:
-            response += "📱 모바일\n"
-            for pos in sorted(mobile_bids.keys()):
-                response += f"├ {medal.get(pos, f'{pos}위')}: {format_number(mobile_bids[pos])}원\n"
-            response += "\n"
-        
-        # 월평균 클릭수
-        response += f"""━━━━━━━━━━━━━━━━
-
-📊 월 예상 광고비 (클릭 기반)
+📍 노출 최소 입찰가
+├ 💻 PC: {format_number(min_bid_pc)}원
+└ 📱 모바일: {format_number(min_bid_mo)}원
 
 🖱️ 월평균 클릭수
 ├ 💻 PC: {format_number(pc_click)}회
 └ 📱 모바일: {format_number(mobile_click)}회
-
 """
         
-        # 목표 순위별 예상 비용 계산
         if total_click > 0:
-            response += "💸 목표 순위별 예상 비용\n\n"
+            # 예상 광고비 계산
+            pc_cost = pc_click * min_bid_pc if min_bid_pc > 0 else 0
+            mo_cost = mobile_click * min_bid_mo if min_bid_mo > 0 else 0
+            total_cost = pc_cost + mo_cost
+            daily_budget = total_cost / 30
             
-            # 사용할 입찰가 (모바일 우선, 없으면 PC)
-            bids_to_use = mobile_bids if mobile_bids else pc_bids
-            
-            for pos in [1, 3, 5]:
-                if pos not in bids_to_use:
-                    continue
-                    
-                bid = bids_to_use[pos]
-                pc_bid = pc_bids.get(pos, bid) if pc_bids else bid
-                mo_bid = mobile_bids.get(pos, bid) if mobile_bids else bid
-                
-                pc_cost = pc_click * pc_bid
-                mo_cost = mobile_click * mo_bid
-                total_cost = pc_cost + mo_cost
-                
-                pos_emoji = {1: '🥇 1위', 3: '🥉 3위', 5: '📍 5위'}.get(pos, f'{pos}위')
-                
-                response += f"{pos_emoji} 노출 목표\n"
-                if pc_click > 0:
-                    response += f"├ 💻 PC: {format_number(pc_click)}회 × {format_number(pc_bid)}원 = {format_won(pc_cost)}\n"
-                if mobile_click > 0:
-                    response += f"├ 📱 모바일: {format_number(mobile_click)}회 × {format_number(mo_bid)}원 = {format_won(mo_cost)}\n"
-                response += f"└ 💰 합계: {format_won(total_cost)}/월\n\n"
-            
-            # 3위 기준 일일 예산 추천
-            if 3 in bids_to_use:
-                bid_3 = bids_to_use[3]
-                pc_bid_3 = pc_bids.get(3, bid_3) if pc_bids else bid_3
-                mo_bid_3 = mobile_bids.get(3, bid_3) if mobile_bids else bid_3
-                monthly_cost_3 = (pc_click * pc_bid_3) + (mobile_click * mo_bid_3)
-                daily_budget = monthly_cost_3 / 30
-                
-                response += f"""━━━━━━━━━━━━━━━━
-
-💡 3위 기준 추천 일일 예산
-└ 약 {format_won(daily_budget)}"""
-        else:
-            response += "⚠️ 클릭 데이터가 부족하여 비용 예측 불가\n"
-        
-        # 참고 정보
-        if min_bid > 0 or median_bid > 0:
             response += f"""
-
 ━━━━━━━━━━━━━━━━
 
-📌 참고 정보"""
-            if min_bid > 0:
-                response += f"\n├ 노출 최소 입찰가: {format_number(min_bid)}원"
-            if median_bid > 0:
-                response += f"\n└ 경쟁자 평균 입찰가: {format_number(median_bid)}원"
-    
-    else:
-        # API 실패시 추정값 사용
-        response += """
-⚠️ 입찰가 API 조회 실패 (추정값 표시)
+💸 월 예상 광고비 (최소 입찰가 기준)
+├ 💻 PC: {format_won(pc_cost)}
+├ 📱 모바일: {format_won(mo_cost)}
+└ 💰 합계: {format_won(total_cost)}/월
 
+💡 추천 일일 예산: {format_won(daily_budget)}
 """
+    else:
+        # API 실패시 추정값
         if comp == "높음":
-            est_min, est_max = 5000, 20000
+            est_cpc = 5000
         elif comp == "중간":
-            est_min, est_max = 500, 5000
+            est_cpc = 1000
         else:
-            est_min, est_max = 100, 1000
+            est_cpc = 300
         
-        response += f"""💵 예상 CPC (추정)
-├ 최소: {format_number(est_min)}원
-├ 평균: {format_number((est_min + est_max) // 2)}원
-└ 최대: {format_number(est_max)}원
+        response += f"""
+⚠️ CPC API 조회 실패 (추정값 표시)
 
-🖱️ 월평균 클릭수
-├ 💻 PC: {format_number(pc_click)}회
-└ 📱 모바일: {format_number(mobile_click)}회
+💵 예상 CPC: 약 {format_number(est_cpc)}원
+
+🖱️ 월평균 클릭수: {format_number(total_click)}회
 """
         
         if total_click > 0:
-            avg_cpc = (est_min + est_max) // 2
-            monthly_cost = total_click * avg_cpc
+            est_cost = total_click * est_cpc
             response += f"""
 💸 월 예상 광고비 (추정)
-└ 약 {format_won(monthly_cost)}"""
+└ 약 {format_won(est_cost)}"""
     
     return response
 
