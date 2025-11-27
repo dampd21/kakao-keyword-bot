@@ -109,7 +109,7 @@ def get_keyword_data(keyword):
 
 
 #############################################
-# CPC API 함수들
+# CPC API 함수들 (수정)
 #############################################
 def get_exposure_minimum_bid(keyword, device='PC'):
     try:
@@ -132,31 +132,50 @@ def get_exposure_minimum_bid(keyword, device='PC'):
         return 0
 
 
-def get_performance_estimate(keyword, bid, device='MOBILE'):
-    """입찰가별 예상 실적 조회"""
+def get_performance_estimate(keyword, bids, device='MOBILE'):
+    """입찰가별 예상 실적 조회 (수정된 버전)"""
     try:
         uri = '/estimate/performance/keyword'
         url = f'https://api.searchad.naver.com{uri}'
         headers = get_naver_api_headers('POST', uri)
         
+        # 올바른 형식: key + bids 배열
         payload = {
             "device": device,
             "keywordplus": False,
             "key": keyword,
-            "bid": bid
+            "bids": bids if isinstance(bids, list) else [bids]
         }
         
         response = requests.post(url, headers=headers, json=payload, timeout=10)
         
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
-        return {"success": False, "status": response.status_code}
+        return {"success": False, "status": response.status_code, "error": response.text}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
+def analyze_bid_performance(keyword):
+    """여러 입찰가로 성과 분석"""
+    # 테스트할 입찰가 범위
+    test_bids = [70, 100, 200, 500, 1000, 2000, 3000, 5000, 7000, 10000]
+    
+    results = {
+        "PC": None,
+        "MOBILE": None
+    }
+    
+    for device in ["PC", "MOBILE"]:
+        perf = get_performance_estimate(keyword, test_bids, device)
+        if perf["success"]:
+            results[device] = perf["data"]
+    
+    return results
+
+
 def estimate_position_bids(min_bid, comp_level):
-    """노출 최소 입찰가 기반 순위별 단가 추정"""
+    """노출 최소 입찰가 기반 순위별 단가 추정 (백업용)"""
     if comp_level == "높음":
         multipliers = {1: 15, 2: 10, 3: 7, 5: 4}
     elif comp_level == "중간":
@@ -230,7 +249,7 @@ def get_related_keywords(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 조회
+# 기능 3: 광고 단가 조회 (개선 버전)
 #############################################
 def get_ad_cost(keyword):
     result = get_keyword_data(keyword)
@@ -257,62 +276,84 @@ def get_ad_cost(keyword):
     mobile_min_bid = get_exposure_minimum_bid(keyword_name, 'MOBILE')
     min_bid = max(pc_min_bid, mobile_min_bid, 70)
     
-    # 순위별 입찰가 추정
-    position_bids = estimate_position_bids(min_bid, comp)
-    
     response = f"""💰 "{keyword_name}" 광고 분석
 
 {comp_emoji} 경쟁도: {comp}
 📊 월간 검색량: {format_number(total_qc)}회
+├ 💻 PC: {format_number(pc_qc)}회
+└ 📱 모바일: {format_number(mobile_qc)}회
 
 ━━━━━━━━━━━━━━━━
 
-💵 노출 최소 입찰가 (API 실측)
+💵 노출 최소 입찰가 (API)
 ├ 💻 PC: {format_number(pc_min_bid)}원
 └ 📱 모바일: {format_number(mobile_min_bid)}원
 
+"""
+    
+    # Performance API로 실제 예상 성과 조회
+    test_bids = [100, 500, 1000, 3000, 5000, 10000]
+    perf_result = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
+    
+    if perf_result["success"] and "estimate" in perf_result["data"]:
+        estimates = perf_result["data"]["estimate"]
+        
+        response += """━━━━━━━━━━━━━━━━
+
+📊 입찰가별 예상 성과 (모바일)
 ━━━━━━━━━━━━━━━━
 
-📊 순위별 예상 입찰가
-
-🥇 1위: 약 {format_number(position_bids[1])}원
-🥈 2위: 약 {format_number(position_bids[2])}원
-🥉 3위: 약 {format_number(position_bids[3])}원
-📍 5위: 약 {format_number(position_bids[5])}원
-
 """
-    
-    if total_click > 0:
-        response += f"""━━━━━━━━━━━━━━━━
-
-🖱️ 월평균 클릭수
-├ 💻 PC: {format_number(pc_click)}회
-└ 📱 모바일: {format_number(mobile_click)}회
-
-💸 목표 순위별 월 예상 비용
-
-"""
-        for pos in [1, 3, 5]:
-            bid = position_bids[pos]
-            monthly_cost = total_click * bid
-            pos_emoji = {1: '🥇 1위', 3: '🥉 3위', 5: '📍 5위'}.get(pos)
-            
-            response += f"{pos_emoji}: {format_number(total_click)}회 × {format_number(bid)}원\n"
-            response += f"     = 약 {format_won(monthly_cost)}/월\n\n"
         
-        daily_budget = (total_click * position_bids[3]) / 30
-        response += f"""━━━━━━━━━━━━━━━━
+        for est in estimates:
+            bid = est.get("bid", 0)
+            clicks = est.get("clicks", 0)
+            impressions = est.get("impressions", 0)
+            cost = est.get("cost", 0)
+            
+            # 실제 CPC 계산
+            actual_cpc = int(cost / clicks) if clicks > 0 else bid
+            
+            response += f"""💵 입찰가 {format_number(bid)}원
+├ 👁️ 노출: {format_number(impressions)}회
+├ 🖱️ 클릭: {format_number(clicks)}회
+├ 💸 예상비용: {format_won(cost)}
+└ 📈 실제CPC: {format_number(actual_cpc)}원
 
-💡 3위 기준 추천 일일 예산
-└ 약 {format_won(daily_budget)}"""
+"""
+        
+        # 월간 비용 예측 (가장 높은 입찰가 기준)
+        if estimates:
+            top_est = estimates[-1]  # 가장 높은 입찰가
+            monthly_clicks = top_est.get("clicks", 0)
+            monthly_cost = top_est.get("cost", 0)
+            
+            if monthly_clicks > 0:
+                response += f"""━━━━━━━━━━━━━━━━
+
+💰 월간 예상 비용 (최상위 노출)
+├ 🖱️ 월 클릭: 약 {format_number(monthly_clicks)}회
+└ 💸 월 비용: 약 {format_won(monthly_cost)}
+
+📅 일일 예산 추천: {format_won(monthly_cost / 30)}"""
     
     else:
-        response += "⚠️ 클릭 데이터 부족으로 비용 예측 불가"
+        # API 실패 시 기존 추정 방식 사용
+        position_bids = estimate_position_bids(min_bid, comp)
+        
+        response += """━━━━━━━━━━━━━━━━
+
+📊 순위별 예상 입찰가 (추정)
+
+"""
+        for pos, bid in sorted(position_bids.items()):
+            pos_emoji = {1: '🥇', 2: '🥈', 3: '🥉', 5: '📍'}.get(pos, '•')
+            response += f"{pos_emoji} {pos}위: 약 {format_number(bid)}원\n"
     
     response += """
 
 ━━━━━━━━━━━━━━━━
-⚠️ 순위별 단가는 경쟁도 기반 추정값"""
+⚠️ 실제 비용은 경쟁 상황에 따라 변동"""
     
     return response
 
@@ -859,6 +900,36 @@ def debug_performance():
         }
     except Exception as e:
         results["tests"]["format4_key_bids"] = {"error": str(e)}
+    
+    return jsonify(results)
+
+
+#############################################
+# 라우트: 상세 CPC 분석
+#############################################
+@app.route('/analyze-cpc')
+def analyze_cpc():
+    keyword = request.args.get('keyword', '맛집')
+    
+    results = {
+        "keyword": keyword,
+        "min_bid": {},
+        "performance": {}
+    }
+    
+    # 노출 최소 입찰가
+    results["min_bid"]["PC"] = get_exposure_minimum_bid(keyword, 'PC')
+    results["min_bid"]["MOBILE"] = get_exposure_minimum_bid(keyword, 'MOBILE')
+    
+    # 입찰가별 예상 성과
+    test_bids = [70, 100, 200, 500, 1000, 2000, 3000, 5000, 7000, 10000]
+    
+    for device in ["PC", "MOBILE"]:
+        perf = get_performance_estimate(keyword, test_bids, device)
+        if perf["success"]:
+            results["performance"][device] = perf["data"]
+        else:
+            results["performance"][device] = {"error": perf.get("error", "Failed")}
     
     return jsonify(results)
 
