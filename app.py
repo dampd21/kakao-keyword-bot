@@ -62,13 +62,11 @@ def format_cost_range(min_cost, max_cost):
 
 
 #############################################
-# 네이버 검색광고 API
+# 네이버 검색광고 API (기본)
 #############################################
-def get_naver_api_headers():
-    """검색광고 API 헤더 생성"""
+def get_naver_api_headers(method="GET", uri="/keywordstool"):
+    """검색광고 API 헤더 생성 (GET/POST 지원)"""
     timestamp = str(int(time.time() * 1000))
-    method = "GET"
-    uri = "/keywordstool"
     
     message = f"{timestamp}.{method}.{uri}"
     signature = hmac.new(
@@ -79,6 +77,7 @@ def get_naver_api_headers():
     signature_base64 = base64.b64encode(signature).decode('utf-8')
     
     return {
+        "Content-Type": "application/json; charset=UTF-8",
         "X-Timestamp": timestamp,
         "X-API-KEY": NAVER_API_KEY,
         "X-Customer": str(NAVER_CUSTOMER_ID),
@@ -94,7 +93,7 @@ def get_keyword_data(keyword):
     base_url = "https://api.searchad.naver.com"
     uri = "/keywordstool"
     
-    headers = get_naver_api_headers()
+    headers = get_naver_api_headers("GET", uri)
     params = {
         "hintKeywords": keyword,
         "showDetail": "1"
@@ -181,18 +180,116 @@ def get_related_keywords(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 조회 (실제 시장 기준)
+# 기능 3: 광고 단가 조회 (실제 CPC API 활용)
 #############################################
+def get_exposure_minimum_bid(keyword, device='PC'):
+    """노출 최소 입찰가 조회"""
+    try:
+        uri = '/npc-estimate/exposure-minimum-bid/keyword'
+        url = f'https://api.searchad.naver.com{uri}'
+        
+        headers = get_naver_api_headers('POST', uri)
+        
+        payload = {
+            "device": device,
+            "items": [keyword]
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if 'estimate' in data:
+                for est in data.get('estimate', []):
+                    if est.get('keyword') == keyword:
+                        return est.get('bid', 0)
+            return 0
+        return None
+    except Exception as e:
+        print(f"노출 최소 입찰가 오류: {e}")
+        return None
+
+
+def get_median_bid(keyword, device='PC'):
+    """중간값 입찰가 조회 (경쟁자 평균)"""
+    try:
+        uri = '/npc-estimate/median-bid/keyword'
+        url = f'https://api.searchad.naver.com{uri}'
+        
+        headers = get_naver_api_headers('POST', uri)
+        
+        payload = {
+            "device": device,
+            "items": [keyword]
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if 'estimate' in data:
+                for est in data.get('estimate', []):
+                    if est.get('keyword') == keyword:
+                        return est.get('bid', 0)
+            return 0
+        return None
+    except Exception as e:
+        print(f"중간값 입찰가 오류: {e}")
+        return None
+
+
+def get_average_position_bid(keyword, device='PC'):
+    """순위별 예상 입찰가 조회 (1~5위)"""
+    try:
+        uri = '/npc-estimate/average-position-bid/keyword'
+        url = f'https://api.searchad.naver.com{uri}'
+        
+        headers = get_naver_api_headers('POST', uri)
+        
+        # 1위, 2위, 3위, 5위 조회
+        items = []
+        for pos in [1, 2, 3, 5]:
+            items.append({
+                "keyword": keyword,
+                "position": pos
+            })
+        
+        payload = {
+            "device": device,
+            "items": items
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            position_bids = {}
+            if 'estimate' in data:
+                for est in data.get('estimate', []):
+                    if est.get('keyword') == keyword:
+                        pos = est.get('position')
+                        bid = est.get('bid', 0)
+                        position_bids[pos] = bid
+            return position_bids
+        return None
+    except Exception as e:
+        print(f"순위별 입찰가 오류: {e}")
+        return None
+
+
 def get_ad_cost(keyword):
-    """광고 단가 정보 조회"""
+    """광고 단가 정보 조회 (실제 CPC API 활용)"""
+    
+    # 1. 기본 키워드 정보 조회
     result = get_keyword_data(keyword)
     
     if not result["success"]:
         return f"❌ 조회 실패\n{result['error']}"
     
     kw = result["data"][0]
+    keyword_name = kw.get('relKeyword', keyword)
     
-    # 실제 API 데이터
+    # 기본 데이터
     pc_click = float(kw.get("monthlyAvePcClkCnt", 0) or 0)
     mobile_click = float(kw.get("monthlyAveMobileClkCnt", 0) or 0)
     total_click = pc_click + mobile_click
@@ -203,78 +300,115 @@ def get_ad_cost(keyword):
     comp = kw.get("compIdx", "정보없음")
     ad_count = kw.get("plAvgDepth", 0) or 0
     
-    # 검색량
     pc_qc = parse_count(kw.get("monthlyPcQcCnt"))
     mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
     total_qc = pc_qc + mobile_qc
     
-    # 경쟁도별 기본 단가 설정 (실제 시장 기준)
+    # 경쟁도 이모지
     if comp == "높음":
-        base_cpc_min = 5000
-        base_cpc_max = 20000
         comp_emoji = "🔴"
         difficulty = "진입 어려움"
-        tip = "💡 롱테일 키워드 공략 추천"
     elif comp == "중간":
-        base_cpc_min = 500
-        base_cpc_max = 5000
         comp_emoji = "🟡"
         difficulty = "보통"
-        tip = "💡 틈새 키워드 발굴 추천"
     else:
-        base_cpc_min = 100
-        base_cpc_max = 1000
         comp_emoji = "🟢"
         difficulty = "진입 쉬움"
-        tip = "💡 적극 공략 추천!"
     
-    # 검색량에 따른 조정
-    if total_qc > 500000:
-        volume_multiplier = 1.5
-    elif total_qc > 100000:
-        volume_multiplier = 1.3
-    elif total_qc > 50000:
-        volume_multiplier = 1.2
-    elif total_qc > 10000:
-        volume_multiplier = 1.1
-    else:
-        volume_multiplier = 1.0
+    # 2. 실제 CPC API 조회
+    min_bid_pc = get_exposure_minimum_bid(keyword_name, 'PC')
+    min_bid_mo = get_exposure_minimum_bid(keyword_name, 'MOBILE')
+    median_bid_pc = get_median_bid(keyword_name, 'PC')
+    median_bid_mo = get_median_bid(keyword_name, 'MOBILE')
+    position_bids = get_average_position_bid(keyword_name, 'PC')
     
-    # 광고수에 따른 조정
-    if ad_count >= 15:
-        ad_multiplier = 1.4
-    elif ad_count >= 10:
-        ad_multiplier = 1.2
-    elif ad_count >= 5:
-        ad_multiplier = 1.1
-    else:
-        ad_multiplier = 1.0
+    # API 조회 성공 여부 확인
+    api_success = (min_bid_pc is not None and min_bid_pc > 0) or \
+                  (median_bid_pc is not None and median_bid_pc > 0) or \
+                  (position_bids is not None and len(position_bids) > 0)
     
-    # 최종 예상 CPC 계산
-    estimated_cpc_min = int(base_cpc_min * volume_multiplier)
-    estimated_cpc_max = int(base_cpc_max * volume_multiplier * ad_multiplier)
-    
-    # 범위 제한
-    estimated_cpc_min = max(100, estimated_cpc_min)
-    estimated_cpc_max = min(50000, estimated_cpc_max)
-    
-    # 월 예상 광고비 계산
-    if total_click > 0:
-        monthly_cost_min = int(total_click * estimated_cpc_min)
-        monthly_cost_max = int(total_click * estimated_cpc_max)
-        monthly_cost_str = format_cost_range(monthly_cost_min, monthly_cost_max)
-    else:
-        monthly_cost_str = "데이터 부족"
-    
-    return f"""💰 "{kw.get('relKeyword', keyword)}" 광고 분석
+    # 3. 결과 포맷팅
+    response = f"""💰 "{keyword_name}" 광고 분석
 
 {comp_emoji} 경쟁도: {comp} ({difficulty})
+📊 월간 검색량: {format_number(total_qc)}회
 
-💵 예상 클릭 단가 (CPC)
-약 {format_number(estimated_cpc_min)}원 ~ {format_number(estimated_cpc_max)}원
+━━━━━━━━━━━━━━━━
 
-💸 월 예상 광고비
-{monthly_cost_str}
+"""
+    
+    if api_success:
+        response += """💵 CPC 단가 (네이버 API 실시간)
+
+"""
+        
+        # 노출 최소 입찰가
+        if min_bid_pc or min_bid_mo:
+            response += "📍 노출 최소 입찰가\n"
+            if min_bid_pc and min_bid_pc > 0:
+                response += f"   💻 PC: {format_number(min_bid_pc)}원\n"
+            if min_bid_mo and min_bid_mo > 0:
+                response += f"   📱 모바일: {format_number(min_bid_mo)}원\n"
+            response += "\n"
+        
+        # 경쟁자 평균 입찰가
+        if median_bid_pc or median_bid_mo:
+            response += "📍 경쟁자 평균 입찰가\n"
+            if median_bid_pc and median_bid_pc > 0:
+                response += f"   💻 PC: {format_number(median_bid_pc)}원\n"
+            if median_bid_mo and median_bid_mo > 0:
+                response += f"   📱 모바일: {format_number(median_bid_mo)}원\n"
+            response += "\n"
+        
+        # 순위별 입찰가
+        if position_bids and len(position_bids) > 0:
+            response += "📍 순위별 예상 입찰가 (PC)\n"
+            medal = {1: '🥇', 2: '🥈', 3: '🥉', 5: '📍'}
+            for pos in sorted(position_bids.keys()):
+                if position_bids[pos] > 0:
+                    response += f"   {medal.get(pos, '📍')} {pos}위: {format_number(position_bids[pos])}원\n"
+            response += "\n"
+        
+        # 예상 광고비 계산 (중간값 또는 최소값 기준)
+        avg_cpc = median_bid_pc or median_bid_mo or min_bid_pc or min_bid_mo or 500
+        
+    else:
+        # API 실패시 추정값 사용
+        if comp == "높음":
+            base_cpc_min = 5000
+            base_cpc_max = 20000
+        elif comp == "중간":
+            base_cpc_min = 500
+            base_cpc_max = 5000
+        else:
+            base_cpc_min = 100
+            base_cpc_max = 1000
+        
+        # 검색량에 따른 조정
+        if total_qc > 500000:
+            volume_multiplier = 1.5
+        elif total_qc > 100000:
+            volume_multiplier = 1.3
+        elif total_qc > 50000:
+            volume_multiplier = 1.2
+        else:
+            volume_multiplier = 1.0
+        
+        estimated_cpc_min = int(base_cpc_min * volume_multiplier)
+        estimated_cpc_max = int(base_cpc_max * volume_multiplier)
+        avg_cpc = (estimated_cpc_min + estimated_cpc_max) // 2
+        
+        response += f"""💵 예상 CPC (추정)
+├ 최소: {format_number(estimated_cpc_min)}원
+├ 평균: {format_number(avg_cpc)}원
+└ 최대: {format_number(estimated_cpc_max)}원
+
+⚠️ 추정값입니다 (API 조회 실패)
+
+"""
+    
+    # 광고 경쟁 현황
+    response += f"""━━━━━━━━━━━━━━━━
 
 📊 광고 경쟁 현황
 ├ 평균 노출 광고수: {ad_count}개
@@ -288,10 +422,37 @@ def get_ad_cost(keyword):
 ├ 📱 모바일: {mobile_ctr}%
 └ 💻 PC: {pc_ctr}%
 
-━━━━━━━━━━━━━━━━
-{tip}
+"""
+    
+    # 월 예상 광고비 계산
+    if total_click > 0:
+        monthly_cost = int(total_click * avg_cpc)
+        response += f"""━━━━━━━━━━━━━━━━
 
-⚠️ 실제 단가는 입찰 경쟁에 따라 달라집니다."""
+💸 월 예상 광고비
+├ 평균 CPC: {format_number(avg_cpc)}원
+├ 예상 클릭: {format_number(int(total_click))}회
+└ 예상 비용: {format_number(monthly_cost)}원
+
+💡 추천 일일 예산
+├ 보수적: {format_number(monthly_cost // 60)}원
+├ 적정: {format_number(monthly_cost // 30)}원
+└ 공격적: {format_number(monthly_cost // 15)}원"""
+    else:
+        response += """━━━━━━━━━━━━━━━━
+💸 월 예상 광고비: 클릭 데이터 부족"""
+    
+    # 팁 추가
+    if comp == "높음":
+        tip = "\n\n💡 롱테일 키워드 공략 추천"
+    elif comp == "중간":
+        tip = "\n\n💡 틈새 키워드 발굴 추천"
+    else:
+        tip = "\n\n💡 적극 공략 추천!"
+    
+    response += tip
+    
+    return response
 
 
 #############################################
@@ -750,9 +911,10 @@ def get_help():
 👉 "연관" + 키워드
 예) 연관 맛집
 
-💰 광고 단가
+💰 광고 단가 (CPC API)
 👉 "광고" + 키워드
 예) 광고 맛집
+※ 실제 네이버 API 단가!
 
 📝 블로그 상위글
 👉 "블로그" + 키워드
