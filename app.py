@@ -47,7 +47,6 @@ def parse_count(value):
     return 0
 
 def format_won(value):
-    """금액을 읽기 쉽게 포맷"""
     if value >= 100000000:
         return f"{value / 100000000:.1f}억원"
     elif value >= 10000:
@@ -60,7 +59,6 @@ def format_won(value):
 # 네이버 검색광고 API
 #############################################
 def get_naver_api_headers(method="GET", uri="/keywordstool"):
-    """검색광고 API 헤더 생성"""
     timestamp = str(int(time.time() * 1000))
     
     message = f"{timestamp}.{method}.{uri}"
@@ -80,8 +78,6 @@ def get_naver_api_headers(method="GET", uri="/keywordstool"):
     }
 
 def get_keyword_data(keyword):
-    """키워드 검색량 데이터 가져오기"""
-    
     if not NAVER_API_KEY or not NAVER_SECRET_KEY or not NAVER_CUSTOMER_ID:
         return {"success": False, "error": "API 키가 설정되지 않았습니다."}
     
@@ -111,100 +107,72 @@ def get_keyword_data(keyword):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+
 #############################################
 # CPC API 함수들
 #############################################
-def call_estimate_api(uri, payload):
-    """Estimate API 공통 호출 함수"""
+def get_exposure_minimum_bid(keyword, device='PC'):
     try:
+        uri = '/npc-estimate/exposure-minimum-bid/keyword'
+        url = f'https://api.searchad.naver.com{uri}'
+        
+        headers = get_naver_api_headers('POST', uri)
+        payload = {"device": device, "items": [keyword]}
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if 'estimate' in data:
+                for est in data.get('estimate', []):
+                    if est.get('keyword') == keyword:
+                        return est.get('bid', 0)
+        return 0
+    except:
+        return 0
+
+
+def get_performance_estimate(keyword, bid, device='MOBILE'):
+    """입찰가별 예상 실적 조회"""
+    try:
+        uri = '/estimate/performance/keyword'
         url = f'https://api.searchad.naver.com{uri}'
         headers = get_naver_api_headers('POST', uri)
+        
+        payload = {
+            "device": device,
+            "keywordplus": False,
+            "key": keyword,
+            "bid": bid
+        }
         
         response = requests.post(url, headers=headers, json=payload, timeout=10)
         
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
-        else:
-            return {"success": False, "error": f"Status {response.status_code}"}
-            
+        return {"success": False, "status": response.status_code}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-def get_exposure_minimum_bid(keyword, device='PC'):
-    """노출 최소 입찰가 조회"""
-    uri = '/npc-estimate/exposure-minimum-bid/keyword'
-    payload = {
-        "device": device,
-        "items": [keyword]
-    }
+def estimate_position_bids(min_bid, comp_level):
+    """노출 최소 입찰가 기반 순위별 단가 추정"""
+    if comp_level == "높음":
+        multipliers = {1: 15, 2: 10, 3: 7, 5: 4}
+    elif comp_level == "중간":
+        multipliers = {1: 10, 2: 7, 3: 5, 5: 3}
+    else:
+        multipliers = {1: 5, 2: 4, 3: 3, 5: 2}
     
-    result = call_estimate_api(uri, payload)
+    base_bid = max(min_bid, 70)
     
-    if result["success"]:
-        data = result["data"]
-        if 'estimate' in data:
-            for est in data.get('estimate', []):
-                if est.get('keyword') == keyword:
-                    return est.get('bid', 0)
-    return 0
+    return {pos: base_bid * mult for pos, mult in multipliers.items()}
 
-
-def get_median_bid(keyword, device='PC'):
-    """중간값 입찰가 조회"""
-    uri = '/npc-estimate/median-bid/keyword'
-    payload = {
-        "device": device,
-        "items": [keyword]
-    }
-    
-    result = call_estimate_api(uri, payload)
-    
-    if result["success"]:
-        data = result["data"]
-        if 'estimate' in data:
-            for est in data.get('estimate', []):
-                if est.get('keyword') == keyword:
-                    return est.get('bid', 0)
-    return 0
-
-
-def get_position_bids(keyword, device='PC'):
-    """순위별 예상 입찰가 조회 (1~5위)"""
-    uri = '/npc-estimate/average-position-bid/keyword'
-    
-    items = []
-    for pos in [1, 2, 3, 5]:
-        items.append({
-            "keyword": keyword,
-            "position": pos
-        })
-    
-    payload = {
-        "device": device,
-        "items": items
-    }
-    
-    result = call_estimate_api(uri, payload)
-    
-    if result["success"]:
-        data = result["data"]
-        position_bids = {}
-        if 'estimate' in data:
-            for est in data.get('estimate', []):
-                if est.get('keyword') == keyword:
-                    pos = est.get('position')
-                    bid = est.get('bid', 0)
-                    if bid and bid > 0:
-                        position_bids[pos] = bid
-        return position_bids if position_bids else None
-    return None
 
 #############################################
 # 기능 1: 검색량 조회
 #############################################
 def get_search_volume(keyword):
-    """키워드 검색량 조회"""
     result = get_keyword_data(keyword)
     
     if not result["success"]:
@@ -231,7 +199,6 @@ def get_search_volume(keyword):
 # 기능 2: 연관 키워드 조회
 #############################################
 def get_related_keywords(keyword):
-    """연관 키워드 5개 조회"""
     result = get_keyword_data(keyword)
     
     if not result["success"]:
@@ -263,87 +230,9 @@ def get_related_keywords(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 조회 (순위별 입찰가 기반)
+# 기능 3: 광고 단가 조회
 #############################################
-def get_exposure_minimum_bid(keyword, device='PC'):
-    """노출 최소 입찰가 조회 (참고용)"""
-    try:
-        uri = '/npc-estimate/exposure-minimum-bid/keyword'
-        url = f'https://api.searchad.naver.com{uri}'
-        
-        headers = get_naver_api_headers('POST', uri)
-        payload = {"device": device, "items": [keyword]}
-        
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if 'estimate' in data:
-                for est in data.get('estimate', []):
-                    if est.get('keyword') == keyword:
-                        return est.get('bid', 0)
-        return 0
-    except:
-        return 0
-
-
-def get_median_bid(keyword, device='PC'):
-    """중간값 입찰가 조회 (경쟁자 평균, 참고용)"""
-    try:
-        uri = '/npc-estimate/median-bid/keyword'
-        url = f'https://api.searchad.naver.com{uri}'
-        
-        headers = get_naver_api_headers('POST', uri)
-        payload = {"device": device, "items": [keyword]}
-        
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if 'estimate' in data:
-                for est in data.get('estimate', []):
-                    if est.get('keyword') == keyword:
-                        return est.get('bid', 0)
-        return 0
-    except:
-        return 0
-
-
-def get_position_bids(keyword, device='PC'):
-    """순위별 예상 입찰가 조회 (1~5위) - 실제 계산에 사용"""
-    try:
-        uri = '/npc-estimate/average-position-bid/keyword'
-        url = f'https://api.searchad.naver.com{uri}'
-        
-        headers = get_naver_api_headers('POST', uri)
-        
-        # 1위, 2위, 3위, 5위 조회
-        items = [{"keyword": keyword, "position": pos} for pos in [1, 2, 3, 5]]
-        payload = {"device": device, "items": items}
-        
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            position_bids = {}
-            if 'estimate' in data:
-                for est in data.get('estimate', []):
-                    if est.get('keyword') == keyword:
-                        pos = est.get('position')
-                        bid = est.get('bid', 0)
-                        if bid and bid > 0:
-                            position_bids[pos] = bid
-            return position_bids if position_bids else None
-        return None
-    except Exception as e:
-        print(f"순위별 입찰가 오류: {e}")
-        return None
-
-
 def get_ad_cost(keyword):
-    """광고 단가 정보 조회"""
-    
-    # 1. 기본 키워드 정보 조회
     result = get_keyword_data(keyword)
     
     if not result["success"]:
@@ -352,7 +241,6 @@ def get_ad_cost(keyword):
     kw = result["data"][0]
     keyword_name = kw.get('relKeyword', keyword)
     
-    # 기본 데이터
     pc_click = int(float(kw.get("monthlyAvePcClkCnt", 0) or 0))
     mobile_click = int(float(kw.get("monthlyAveMobileClkCnt", 0) or 0))
     total_click = pc_click + mobile_click
@@ -362,85 +250,69 @@ def get_ad_cost(keyword):
     total_qc = pc_qc + mobile_qc
     
     comp = kw.get("compIdx", "정보없음")
+    comp_emoji = {"높음": "🔴", "중간": "🟡"}.get(comp, "🟢")
     
-    # 경쟁도 이모지
-    if comp == "높음":
-        comp_emoji = "🔴"
-    elif comp == "중간":
-        comp_emoji = "🟡"
-    else:
-        comp_emoji = "🟢"
+    # 노출 최소 입찰가 조회
+    pc_min_bid = get_exposure_minimum_bid(keyword_name, 'PC')
+    mobile_min_bid = get_exposure_minimum_bid(keyword_name, 'MOBILE')
+    min_bid = max(pc_min_bid, mobile_min_bid, 70)
     
-    # 2. CPC API 조회 (노출 최소 입찰가)
-    min_bid_pc = get_exposure_minimum_bid(keyword_name, 'PC')
-    min_bid_mo = get_exposure_minimum_bid(keyword_name, 'MOBILE')
+    # 순위별 입찰가 추정
+    position_bids = estimate_position_bids(min_bid, comp)
     
-    # 대표 CPC 결정
-    main_cpc = min_bid_mo if min_bid_mo > 0 else min_bid_pc
-    
-    # 3. 결과 포맷팅
     response = f"""💰 "{keyword_name}" 광고 분석
 
 {comp_emoji} 경쟁도: {comp}
 📊 월간 검색량: {format_number(total_qc)}회
-├ 💻 PC: {format_number(pc_qc)}회
-└ 📱 모바일: {format_number(mobile_qc)}회
 
 ━━━━━━━━━━━━━━━━
+
+💵 노출 최소 입찰가 (API 실측)
+├ 💻 PC: {format_number(pc_min_bid)}원
+└ 📱 모바일: {format_number(mobile_min_bid)}원
+
+━━━━━━━━━━━━━━━━
+
+📊 순위별 예상 입찰가
+
+🥇 1위: 약 {format_number(position_bids[1])}원
+🥈 2위: 약 {format_number(position_bids[2])}원
+🥉 3위: 약 {format_number(position_bids[3])}원
+📍 5위: 약 {format_number(position_bids[5])}원
+
 """
     
-    if main_cpc > 0:
-        response += f"""
-💵 CPC 단가 (네이버 API)
-
-📍 노출 최소 입찰가
-├ 💻 PC: {format_number(min_bid_pc)}원
-└ 📱 모바일: {format_number(min_bid_mo)}원
+    if total_click > 0:
+        response += f"""━━━━━━━━━━━━━━━━
 
 🖱️ 월평균 클릭수
 ├ 💻 PC: {format_number(pc_click)}회
 └ 📱 모바일: {format_number(mobile_click)}회
+
+💸 목표 순위별 월 예상 비용
+
 """
-        
-        if total_click > 0:
-            # 예상 광고비 계산
-            pc_cost = pc_click * min_bid_pc if min_bid_pc > 0 else 0
-            mo_cost = mobile_click * min_bid_mo if min_bid_mo > 0 else 0
-            total_cost = pc_cost + mo_cost
-            daily_budget = total_cost / 30
+        for pos in [1, 3, 5]:
+            bid = position_bids[pos]
+            monthly_cost = total_click * bid
+            pos_emoji = {1: '🥇 1위', 3: '🥉 3위', 5: '📍 5위'}.get(pos)
             
-            response += f"""
-━━━━━━━━━━━━━━━━
+            response += f"{pos_emoji}: {format_number(total_click)}회 × {format_number(bid)}원\n"
+            response += f"     = 약 {format_won(monthly_cost)}/월\n\n"
+        
+        daily_budget = (total_click * position_bids[3]) / 30
+        response += f"""━━━━━━━━━━━━━━━━
 
-💸 월 예상 광고비 (최소 입찰가 기준)
-├ 💻 PC: {format_won(pc_cost)}
-├ 📱 모바일: {format_won(mo_cost)}
-└ 💰 합계: {format_won(total_cost)}/월
-
-💡 추천 일일 예산: {format_won(daily_budget)}
-"""
+💡 3위 기준 추천 일일 예산
+└ 약 {format_won(daily_budget)}"""
+    
     else:
-        # API 실패시 추정값
-        if comp == "높음":
-            est_cpc = 5000
-        elif comp == "중간":
-            est_cpc = 1000
-        else:
-            est_cpc = 300
-        
-        response += f"""
-⚠️ CPC API 조회 실패 (추정값 표시)
+        response += "⚠️ 클릭 데이터 부족으로 비용 예측 불가"
+    
+    response += """
 
-💵 예상 CPC: 약 {format_number(est_cpc)}원
-
-🖱️ 월평균 클릭수: {format_number(total_click)}회
-"""
-        
-        if total_click > 0:
-            est_cost = total_click * est_cpc
-            response += f"""
-💸 월 예상 광고비 (추정)
-└ 약 {format_won(est_cost)}"""
+━━━━━━━━━━━━━━━━
+⚠️ 순위별 단가는 경쟁도 기반 추정값"""
     
     return response
 
@@ -449,8 +321,6 @@ def get_ad_cost(keyword):
 # 기능 4: 블로그 상위 5개 제목
 #############################################
 def get_blog_titles(keyword):
-    """네이버 블로그 상위 5개 제목 가져오기"""
-    
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         return f"""📝 "{keyword}" 블로그 분석
 
@@ -509,8 +379,6 @@ def get_blog_titles(keyword):
 # 기능 5: 오늘의 운세 (Gemini)
 #############################################
 def get_fortune():
-    """Gemini로 오늘의 운세 생성"""
-    
     if not GEMINI_API_KEY:
         return get_fortune_fallback()
     
@@ -561,7 +429,6 @@ def get_fortune():
         return get_fortune_fallback()
 
 def get_fortune_fallback():
-    """기본 운세"""
     fortunes = ["오늘은 새로운 기회가 찾아오는 날!", "좋은 소식이 들려올 예정이에요.", "작은 행운이 당신을 따라다녀요."]
     love = ["설레는 만남이 있을 수 있어요 💕", "소중한 사람과 대화를 나눠보세요"]
     money = ["작은 횡재수가 있어요 💰", "절약이 미덕인 날"]
@@ -593,8 +460,6 @@ def get_fortune_fallback():
 # 기능 6: 로또 번호 추천 (Gemini)
 #############################################
 def get_lotto():
-    """Gemini로 로또 번호 추천"""
-    
     if not GEMINI_API_KEY:
         return get_lotto_fallback()
     
@@ -646,7 +511,6 @@ def get_lotto():
         return get_lotto_fallback()
 
 def get_lotto_fallback():
-    """기본 로또 번호 생성"""
     result = """🎰 이번 주 로또 번호 추천!
 
 """
@@ -668,17 +532,14 @@ def get_lotto_fallback():
 
 
 #############################################
-# 기능 7: 대표키워드 조회 (네이버 플레이스)
+# 기능 7: 대표키워드 조회
 #############################################
 def get_place_keywords(place_id):
-    """네이버 플레이스 대표키워드 추출"""
-    
-    # 네이버 플레이스 GraphQL API 사용
     url = "https://pcmap-api.place.naver.com/graphql"
     
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": f"https://pcmap.place.naver.com/restaurant/{place_id}/home",
         "Origin": "https://pcmap.place.naver.com"
     }
@@ -694,11 +555,7 @@ def get_place_keywords(place_id):
     payload = {
         "operationName": "getRestaurant",
         "query": query,
-        "variables": {
-            "input": {
-                "id": place_id
-            }
-        }
+        "variables": {"input": {"id": place_id}}
     }
     
     try:
@@ -712,11 +569,7 @@ def get_place_keywords(place_id):
                 if restaurant and "keywords" in restaurant:
                     keywords = restaurant["keywords"]
                     if keywords and len(keywords) > 0:
-                        return {
-                            "success": True,
-                            "place_id": place_id,
-                            "keywords": keywords
-                        }
+                        return {"success": True, "place_id": place_id, "keywords": keywords}
         
         return get_place_keywords_html(place_id)
             
@@ -725,12 +578,10 @@ def get_place_keywords(place_id):
 
 
 def get_place_keywords_html(place_id):
-    """HTML 파싱 방식 (백업)"""
-    
     url = f"https://m.place.naver.com/restaurant/{place_id}/home"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept-Language": "ko-KR,ko;q=0.9",
     }
     
@@ -738,17 +589,9 @@ def get_place_keywords_html(place_id):
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code != 200:
-            return {
-                "success": False,
-                "error": f"페이지 조회 실패 (코드: {response.status_code})"
-            }
+            return {"success": False, "error": f"페이지 조회 실패 (코드: {response.status_code})"}
         
-        content = response.content
-        
-        try:
-            html = content.decode('utf-8')
-        except:
-            html = content.decode('utf-8', errors='ignore')
+        html = response.content.decode('utf-8', errors='ignore')
         
         next_data_pattern = r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>'
         next_match = re.search(next_data_pattern, html, re.DOTALL)
@@ -760,51 +603,17 @@ def get_place_keywords_html(place_id):
                 keywords = find_keywords_in_json(data)
                 
                 if keywords:
-                    return {
-                        "success": True,
-                        "place_id": place_id,
-                        "keywords": keywords
-                    }
+                    return {"success": True, "place_id": place_id, "keywords": keywords}
             except:
                 pass
         
-        patterns = [
-            r'"keywordList"\s*:\s*\[(.*?)\]',
-            r'"keywords"\s*:\s*\[(.*?)\]',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, html, re.DOTALL)
-            if match:
-                try:
-                    keywords_str = match.group(1)
-                    keywords_json = f'[{keywords_str}]'
-                    keywords = json.loads(keywords_json)
-                    
-                    if keywords:
-                        return {
-                            "success": True,
-                            "place_id": place_id,
-                            "keywords": keywords
-                        }
-                except:
-                    continue
-        
-        return {
-            "success": False,
-            "error": "대표키워드를 찾을 수 없습니다.\n\n가능한 원인:\n• 잘못된 플레이스 ID\n• 음식점이 아닌 업종\n• 대표키워드 미등록 업체"
-        }
+        return {"success": False, "error": "대표키워드를 찾을 수 없습니다."}
             
     except Exception as e:
-        return {
-            "success": False,
-            "error": f"오류 발생: {str(e)}"
-        }
+        return {"success": False, "error": f"오류 발생: {str(e)}"}
 
 
 def find_keywords_in_json(obj, depth=0):
-    """JSON 객체에서 keywords 재귀적으로 찾기"""
-    
     if depth > 20:
         return None
     
@@ -832,8 +641,6 @@ def find_keywords_in_json(obj, depth=0):
 
 
 def format_place_keywords(place_id):
-    """대표키워드 결과 포맷팅"""
-    
     result = get_place_keywords(place_id)
     
     if not result["success"]:
@@ -888,7 +695,6 @@ def get_help():
 💰 광고 단가 (CPC)
 👉 "광고" + 키워드
 예) 광고 맛집
-※ 순위별 실제 입찰가!
 
 📝 블로그 상위글
 👉 "블로그" + 키워드
@@ -941,41 +747,76 @@ def test():
     else:
         return f"<h2>❌ 조회 실패</h2><p>{result['error']}</p>"
 
+
 #############################################
-# 라우트: API 디버그 테스트
+# 라우트: CPC 디버그
 #############################################
 @app.route('/debug-cpc')
 def debug_cpc():
-    """CPC API 디버그용"""
     keyword = request.args.get('keyword', '맛집')
+    
+    results = {"keyword": keyword, "tests": {}}
+    
+    # 노출 최소 입찰가
+    pc_min = get_exposure_minimum_bid(keyword, 'PC')
+    mo_min = get_exposure_minimum_bid(keyword, 'MOBILE')
+    results["tests"]["min_bid"] = {"PC": pc_min, "MOBILE": mo_min}
+    
+    return jsonify(results)
+
+
+#############################################
+# 라우트: Performance API 테스트
+#############################################
+@app.route('/debug-performance')
+def debug_performance():
+    keyword = request.args.get('keyword', '맛집')
+    bid = int(request.args.get('bid', 1000))
     
     results = {
         "keyword": keyword,
+        "bid": bid,
         "tests": {}
     }
     
-    # 1. 노출 최소 입찰가 테스트
-    uri1 = '/npc-estimate/exposure-minimum-bid/keyword'
-    payload1 = {"device": "PC", "items": [keyword]}
-    result1 = call_estimate_api(uri1, payload1)
-    results["tests"]["exposure_minimum_bid"] = result1
+    # 1. 노출 최소 입찰가
+    min_bid_pc = get_exposure_minimum_bid(keyword, 'PC')
+    min_bid_mo = get_exposure_minimum_bid(keyword, 'MOBILE')
+    results["min_bid"] = {"PC": min_bid_pc, "MOBILE": min_bid_mo}
     
-    # 2. 중간값 입찰가 테스트
-    uri2 = '/npc-estimate/median-bid/keyword'
-    payload2 = {"device": "PC", "items": [keyword]}
-    result2 = call_estimate_api(uri2, payload2)
-    results["tests"]["median_bid"] = result2
+    # 2. Performance API 테스트
+    for device in ['PC', 'MOBILE']:
+        uri = '/estimate/performance/keyword'
+        url = f'https://api.searchad.naver.com{uri}'
+        headers = get_naver_api_headers('POST', uri)
+        
+        payload = {
+            "device": device,
+            "keywordplus": False,
+            "key": keyword,
+            "bid": bid
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
+            if response.status_code == 200:
+                results["tests"][f"performance_{device}"] = {
+                    "success": True,
+                    "data": response.json()
+                }
+            else:
+                results["tests"][f"performance_{device}"] = {
+                    "success": False,
+                    "status": response.status_code,
+                    "error": response.text[:200]
+                }
+        except Exception as e:
+            results["tests"][f"performance_{device}"] = {
+                "success": False,
+                "error": str(e)
+            }
     
-    # 3. 순위별 입찰가 테스트
-    uri3 = '/npc-estimate/average-position-bid/keyword'
-    payload3 = {
-        "device": "PC",
-        "items": [{"keyword": keyword, "position": 1}]
-    }
-    result3 = call_estimate_api(uri3, payload3)
-    results["tests"]["average_position_bid"] = result3
-    
-    return jsonify(results)        
+    return jsonify(results)
 
 
 #############################################
@@ -1016,7 +857,7 @@ def kakao_skill():
             if place_id:
                 response_text = format_place_keywords(place_id)
             else:
-                response_text = "❌ 플레이스 ID를 입력해주세요\n\n예) 대표 37838432\n\n💡 플레이스 ID 찾는 법:\n네이버 지도에서 업체 검색 → URL에서 숫자 확인"
+                response_text = "❌ 플레이스 ID를 입력해주세요\n\n예) 대표 37838432"
         
         # 연관 키워드
         elif lower_input.startswith("연관 "):
