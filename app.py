@@ -111,6 +111,94 @@ def get_keyword_data(keyword):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+#############################################
+# CPC API 함수들
+#############################################
+def call_estimate_api(uri, payload):
+    """Estimate API 공통 호출 함수"""
+    try:
+        url = f'https://api.searchad.naver.com{uri}'
+        headers = get_naver_api_headers('POST', uri)
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            return {"success": True, "data": response.json()}
+        else:
+            return {"success": False, "error": f"Status {response.status_code}"}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def get_exposure_minimum_bid(keyword, device='PC'):
+    """노출 최소 입찰가 조회"""
+    uri = '/npc-estimate/exposure-minimum-bid/keyword'
+    payload = {
+        "device": device,
+        "items": [keyword]
+    }
+    
+    result = call_estimate_api(uri, payload)
+    
+    if result["success"]:
+        data = result["data"]
+        if 'estimate' in data:
+            for est in data.get('estimate', []):
+                if est.get('keyword') == keyword:
+                    return est.get('bid', 0)
+    return 0
+
+
+def get_median_bid(keyword, device='PC'):
+    """중간값 입찰가 조회"""
+    uri = '/npc-estimate/median-bid/keyword'
+    payload = {
+        "device": device,
+        "items": [keyword]
+    }
+    
+    result = call_estimate_api(uri, payload)
+    
+    if result["success"]:
+        data = result["data"]
+        if 'estimate' in data:
+            for est in data.get('estimate', []):
+                if est.get('keyword') == keyword:
+                    return est.get('bid', 0)
+    return 0
+
+
+def get_position_bids(keyword, device='PC'):
+    """순위별 예상 입찰가 조회 (1~5위)"""
+    uri = '/npc-estimate/average-position-bid/keyword'
+    
+    items = []
+    for pos in [1, 2, 3, 5]:
+        items.append({
+            "keyword": keyword,
+            "position": pos
+        })
+    
+    payload = {
+        "device": device,
+        "items": items
+    }
+    
+    result = call_estimate_api(uri, payload)
+    
+    if result["success"]:
+        data = result["data"]
+        position_bids = {}
+        if 'estimate' in data:
+            for est in data.get('estimate', []):
+                if est.get('keyword') == keyword:
+                    pos = est.get('position')
+                    bid = est.get('bid', 0)
+                    if bid and bid > 0:
+                        position_bids[pos] = bid
+        return position_bids if position_bids else None
+    return None
 
 #############################################
 # 기능 1: 검색량 조회
