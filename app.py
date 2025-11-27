@@ -766,16 +766,14 @@ def debug_cpc():
 
 
 #############################################
-# 라우트: Performance API 테스트
+# 라우트: Performance API 테스트 (수정)
 #############################################
 @app.route('/debug-performance')
 def debug_performance():
     keyword = request.args.get('keyword', '맛집')
-    bid = int(request.args.get('bid', 1000))
     
     results = {
         "keyword": keyword,
-        "bid": bid,
         "tests": {}
     }
     
@@ -784,37 +782,83 @@ def debug_performance():
     min_bid_mo = get_exposure_minimum_bid(keyword, 'MOBILE')
     results["min_bid"] = {"PC": min_bid_pc, "MOBILE": min_bid_mo}
     
-    # 2. Performance API 테스트
-    for device in ['PC', 'MOBILE']:
-        uri = '/estimate/performance/keyword'
-        url = f'https://api.searchad.naver.com{uri}'
-        headers = get_naver_api_headers('POST', uri)
-        
-        payload = {
-            "device": device,
-            "keywordplus": False,
-            "key": keyword,
-            "bid": bid
+    # 2. 여러 형식으로 Performance API 테스트
+    uri = '/estimate/performance/keyword'
+    url = f'https://api.searchad.naver.com{uri}'
+    headers = get_naver_api_headers('POST', uri)
+    
+    # 형식 1: bids 배열 사용
+    payload1 = {
+        "device": "MOBILE",
+        "keywordplus": False,
+        "keyword": keyword,
+        "bids": [100, 500, 1000, 3000, 5000]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload1, timeout=10)
+        results["tests"]["format1_bids_array"] = {
+            "payload": payload1,
+            "status": response.status_code,
+            "response": response.json() if response.status_code == 200 else response.text[:300]
         }
-        
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=10)
-            if response.status_code == 200:
-                results["tests"][f"performance_{device}"] = {
-                    "success": True,
-                    "data": response.json()
-                }
-            else:
-                results["tests"][f"performance_{device}"] = {
-                    "success": False,
-                    "status": response.status_code,
-                    "error": response.text[:200]
-                }
-        except Exception as e:
-            results["tests"][f"performance_{device}"] = {
-                "success": False,
-                "error": str(e)
-            }
+    except Exception as e:
+        results["tests"]["format1_bids_array"] = {"error": str(e)}
+    
+    # 형식 2: items 배열 사용
+    payload2 = {
+        "device": "MOBILE",
+        "keywordplus": False,
+        "items": [
+            {"keyword": keyword, "bid": 1000}
+        ]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload2, timeout=10)
+        results["tests"]["format2_items_array"] = {
+            "payload": payload2,
+            "status": response.status_code,
+            "response": response.json() if response.status_code == 200 else response.text[:300]
+        }
+    except Exception as e:
+        results["tests"]["format2_items_array"] = {"error": str(e)}
+    
+    # 형식 3: 단일 bid + keyword
+    payload3 = {
+        "device": "MOBILE",
+        "keywordplus": False,
+        "keyword": keyword,
+        "bid": 1000
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload3, timeout=10)
+        results["tests"]["format3_single"] = {
+            "payload": payload3,
+            "status": response.status_code,
+            "response": response.json() if response.status_code == 200 else response.text[:300]
+        }
+    except Exception as e:
+        results["tests"]["format3_single"] = {"error": str(e)}
+    
+    # 형식 4: key 대신 keyword
+    payload4 = {
+        "device": "MOBILE",
+        "keywordplus": False,
+        "key": keyword,
+        "bids": [1000]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload4, timeout=10)
+        results["tests"]["format4_key_bids"] = {
+            "payload": payload4,
+            "status": response.status_code,
+            "response": response.json() if response.status_code == 200 else response.text[:300]
+        }
+    except Exception as e:
+        results["tests"]["format4_key_bids"] = {"error": str(e)}
     
     return jsonify(results)
 
