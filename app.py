@@ -156,7 +156,7 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
 
 
 def get_optimal_bid_analysis(estimates, target_clicks=20):
-    """최적 입찰가 분석 - 효율 기반"""
+    """최적 입찰가 분석 - 한계효율 급락 직전 찾기"""
     if not estimates:
         return None
     
@@ -167,10 +167,8 @@ def get_optimal_bid_analysis(estimates, target_clicks=20):
     # 1. 최소 노출
     min_exposure = valid_estimates[0]
     
-    # 2. 효율적인 구간 찾기 (단위 비용당 클릭 증가율)
-    best_efficiency = None
-    max_efficiency_score = 0
-    
+    # 2. 구간별 효율 계산
+    efficiency_data = []
     for i in range(1, len(valid_estimates)):
         prev = valid_estimates[i-1]
         curr = valid_estimates[i]
@@ -179,22 +177,50 @@ def get_optimal_bid_analysis(estimates, target_clicks=20):
         cost_increase = curr.get('cost', 0) - prev.get('cost', 0)
         
         if cost_increase > 0 and click_increase > 0:
-            # 추가 클릭당 비용
             cost_per_additional_click = cost_increase / click_increase
-            # 효율 점수 (낮을수록 좋음)
-            efficiency_score = 1 / cost_per_additional_click
-            
-            # 최소 클릭수 충족하면서 효율이 좋은 구간
-            if curr.get('clicks', 0) >= target_clicks and efficiency_score > max_efficiency_score:
-                max_efficiency_score = efficiency_score
-                best_efficiency = {
-                    'data': curr,
-                    'cost_per_click': cost_per_additional_click,
-                    'click_increase': click_increase,
-                    'cost_increase': cost_increase
-                }
+            efficiency_data.append({
+                'index': i,
+                'data': curr,
+                'prev_data': prev,
+                'click_increase': click_increase,
+                'cost_increase': cost_increase,
+                'cost_per_click': cost_per_additional_click
+            })
     
-    # 효율 못찾으면 중간값
+    # 3. 효율이 급락하는 지점 찾기 (비용이 2배 이상 증가하거나 클릭 증가가 미미한 지점)
+    best_efficiency = None
+    
+    for i, eff in enumerate(efficiency_data):
+        # 다음 구간이 있는지 확인
+        if i + 1 < len(efficiency_data):
+            next_eff = efficiency_data[i + 1]
+            
+            # 다음 구간의 효율이 현재보다 2배 이상 나쁘거나
+            # 다음 구간의 클릭 증가가 현재의 10% 미만이면
+            # 현재 구간이 최적
+            efficiency_drop = next_eff['cost_per_click'] / eff['cost_per_click'] if eff['cost_per_click'] > 0 else 999
+            click_ratio = next_eff['click_increase'] / eff['click_increase'] if eff['click_increase'] > 0 else 0
+            
+            if efficiency_drop >= 2 or click_ratio < 0.1:
+                best_efficiency = {
+                    'data': eff['data'],
+                    'cost_per_click': eff['cost_per_click'],
+                    'click_increase': eff['click_increase'],
+                    'cost_increase': eff['cost_increase'],
+                    'reason': 'efficiency_drop'
+                }
+                break
+        else:
+            # 마지막 구간이면 이게 최적
+            best_efficiency = {
+                'data': eff['data'],
+                'cost_per_click': eff['cost_per_click'],
+                'click_increase': eff['click_increase'],
+                'cost_increase': eff['cost_increase'],
+                'reason': 'last_efficient'
+            }
+    
+    # 효율 분석 실패 시 기존 로직
     if not best_efficiency:
         if len(valid_estimates) >= 3:
             mid_idx = len(valid_estimates) // 2
@@ -202,25 +228,33 @@ def get_optimal_bid_analysis(estimates, target_clicks=20):
                 'data': valid_estimates[mid_idx],
                 'cost_per_click': None
             }
-        else:
+        elif valid_estimates:
             best_efficiency = {
                 'data': valid_estimates[-1],
                 'cost_per_click': None
             }
     
-    # 3. 최대 성과
-    max_performance = valid_estimates[-1]
+    # 4. 최대 성과 (효율이 떨어지기 시작하는 마지막 유효 구간)
+    max_performance = None
+    if best_efficiency:
+        max_performance = best_efficiency['data']
+    else:
+        max_performance = valid_estimates[-1] if valid_estimates else None
     
-    # 최대 성과가 직전 입찰가와 동일한 클릭이면 그 전 것 사용
-    if len(valid_estimates) >= 2:
-        if max_performance.get('clicks') == valid_estimates[-2].get('clicks'):
-            max_performance = valid_estimates[-2]
+    # 클릭수가 동일한 더 낮은 입찰가 찾기
+    if max_performance:
+        max_clicks = max_performance.get('clicks', 0)
+        for est in valid_estimates:
+            if est.get('clicks', 0) == max_clicks:
+                max_performance = est
+                break
     
     return {
         'min_exposure': min_exposure,
         'best_efficiency': best_efficiency,
         'max_performance': max_performance,
-        'all_estimates': valid_estimates
+        'all_estimates': valid_estimates,
+        'efficiency_data': efficiency_data
     }
 
 
