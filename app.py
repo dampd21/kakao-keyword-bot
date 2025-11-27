@@ -139,6 +139,7 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
         url = f'https://api.searchad.naver.com{uri}'
         headers = get_naver_api_headers('POST', uri)
         
+        # 올바른 형식: key + bids 배열
         payload = {
             "device": device,
             "keywordplus": False,
@@ -228,12 +229,15 @@ def get_optimal_bid_analysis(estimates):
                 'cost_per_click': None
             }
     
-    # 4. 차선책 찾기 (추천보다 한 단계 낮은 입찰가)
+    # 4. 차선책 찾기 - 추천 클릭의 15% 이상 (최소 10회)
     alternative = None
     if best_efficiency and len(valid_estimates) >= 2:
+        best_clicks = best_efficiency['data'].get('clicks', 0)
+        min_alternative_clicks = max(best_clicks * 0.15, 10)
+        
         best_bid = best_efficiency['data'].get('bid', 0)
         for est in valid_estimates:
-            if est.get('bid', 0) < best_bid and est.get('clicks', 0) >= 30:
+            if est.get('bid', 0) < best_bid and est.get('clicks', 0) >= min_alternative_clicks:
                 alternative = est
     
     # 5. 효과 동일 구간 찾기 (입찰가 올려도 클릭 안 늘어나는 지점)
@@ -419,7 +423,7 @@ def get_ad_cost(keyword):
 """
                 
                 # 효과 동일 안내
-                if max_effective_bid and max_effective_bid == eff_bid:
+                if max_effective_bid and max_effective_bid <= eff_bid:
                     response += f"※ {format_number(eff_bid)}원 이상 올려도 클릭 증가 없음\n"
                 elif max_effective_bid:
                     response += f"※ {format_number(max_effective_bid)}원 이상 올려도 클릭 증가 없음\n"
