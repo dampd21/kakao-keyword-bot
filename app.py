@@ -7,6 +7,7 @@ import requests
 import os
 import random
 import re
+import json
 
 app = Flask(__name__)
 
@@ -524,29 +525,56 @@ def get_place_keywords(place_id):
     url = f"https://m.place.naver.com/restaurant/{place_id}/home?entry=pll"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1"
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br"
     }
     
     try:
         response = requests.get(url, headers=headers, timeout=10)
+        response.encoding = 'utf-8'  # 인코딩 명시적 설정
         
         if response.status_code == 200:
             html = response.text
             
-            # keywordList 찾기
+            # keywordList 찾기 (유니코드 이스케이프 처리)
             pattern = r'"keywordList"\s*:\s*\[(.*?)\]'
             match = re.search(pattern, html)
             
             if match:
                 keywords_raw = match.group(1)
-                keywords = re.findall(r'"([^"]+)"', keywords_raw)
                 
-                if keywords:
-                    return {
-                        "success": True,
-                        "place_id": place_id,
-                        "keywords": keywords
-                    }
+                # 유니코드 이스케이프 시퀀스 디코딩
+                try:
+                    # \\uXXXX 형태를 실제 유니코드로 변환
+                    keywords_decoded = keywords_raw.encode('utf-8').decode('unicode_escape')
+                except:
+                    keywords_decoded = keywords_raw
+                
+                # 따옴표 안의 내용 추출
+                keywords = re.findall(r'"([^"]+)"', keywords_decoded)
+                
+                # 여전히 깨진 경우 다른 방법 시도
+                if not keywords or any(ord(c) > 0xFFFF for kw in keywords for c in kw if len(kw) > 0):
+                    # JSON 파싱 방식 시도
+                    import json
+                    try:
+                        keywords_json = f'[{keywords_raw}]'
+                        keywords = json.loads(keywords_json)
+                    except:
+                        pass
+                
+                if keywords and len(keywords) > 0:
+                    # 최종 정리 (빈 문자열 제거)
+                    keywords = [kw.strip() for kw in keywords if kw.strip()]
+                    
+                    if keywords:
+                        return {
+                            "success": True,
+                            "place_id": place_id,
+                            "keywords": keywords
+                        }
             
             return {
                 "success": False,
