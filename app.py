@@ -914,6 +914,42 @@ def test():
     else:
         return f"<h2>❌ 조회 실패</h2><p>{result['error']}</p>"
 
+#############################################
+# 라우트: API 디버그 테스트
+#############################################
+@app.route('/debug-cpc')
+def debug_cpc():
+    """CPC API 디버그용"""
+    keyword = request.args.get('keyword', '맛집')
+    
+    results = {
+        "keyword": keyword,
+        "tests": {}
+    }
+    
+    # 1. 노출 최소 입찰가 테스트
+    uri1 = '/npc-estimate/exposure-minimum-bid/keyword'
+    payload1 = {"device": "PC", "items": [keyword]}
+    result1 = call_estimate_api(uri1, payload1)
+    results["tests"]["exposure_minimum_bid"] = result1
+    
+    # 2. 중간값 입찰가 테스트
+    uri2 = '/npc-estimate/median-bid/keyword'
+    payload2 = {"device": "PC", "items": [keyword]}
+    result2 = call_estimate_api(uri2, payload2)
+    results["tests"]["median_bid"] = result2
+    
+    # 3. 순위별 입찰가 테스트
+    uri3 = '/npc-estimate/average-position-bid/keyword'
+    payload3 = {
+        "device": "PC",
+        "items": [{"keyword": keyword, "position": 1}]
+    }
+    result3 = call_estimate_api(uri3, payload3)
+    results["tests"]["average_position_bid"] = result3
+    
+    return jsonify(results)        
+
 
 #############################################
 # 라우트: 카카오 스킬
