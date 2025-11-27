@@ -517,64 +517,78 @@ def get_lotto_fallback():
 
 
 #############################################
-# 기능 7: 대표키워드 조회 (네이버 플레이스)
+# 기능 7: 대표키워드 조회 (API 방식)
 #############################################
 def get_place_keywords(place_id):
-    """네이버 플레이스 대표키워드 추출"""
+    """네이버 플레이스 대표키워드 추출 - API 방식"""
     
-    url = f"https://m.place.naver.com/restaurant/{place_id}/home?entry=pll"
+    # 네이버 플레이스 내부 API
+    url = f"https://m.place.naver.com/restaurant/{place_id}/home"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br"
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.8,en-US;q=0.5,en;q=0.3",
+        "Connection": "keep-alive",
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.encoding = 'utf-8'  # 인코딩 명시적 설정
+        session = requests.Session()
+        response = session.get(url, headers=headers, timeout=15)
+        response.encoding = 'utf-8'
         
         if response.status_code == 200:
             html = response.text
             
-            # keywordList 찾기 (유니코드 이스케이프 처리)
-            pattern = r'"keywordList"\s*:\s*\[(.*?)\]'
-            match = re.search(pattern, html)
+            # 방법 1: JSON 데이터에서 직접 추출
+            # window.__APOLLO_STATE__ 또는 __NEXT_DATA__ 에서 찾기
             
-            if match:
-                keywords_raw = match.group(1)
-                
-                # 유니코드 이스케이프 시퀀스 디코딩
-                try:
-                    # \\uXXXX 형태를 실제 유니코드로 변환
-                    keywords_decoded = keywords_raw.encode('utf-8').decode('unicode_escape')
-                except:
-                    keywords_decoded = keywords_raw
-                
-                # 따옴표 안의 내용 추출
-                keywords = re.findall(r'"([^"]+)"', keywords_decoded)
-                
-                # 여전히 깨진 경우 다른 방법 시도
-                if not keywords or any(ord(c) > 0xFFFF for kw in keywords for c in kw if len(kw) > 0):
-                    # JSON 파싱 방식 시도
-                    import json
-                    try:
-                        keywords_json = f'[{keywords_raw}]'
-                        keywords = json.loads(keywords_json)
-                    except:
-                        pass
-                
-                if keywords and len(keywords) > 0:
-                    # 최종 정리 (빈 문자열 제거)
-                    keywords = [kw.strip() for kw in keywords if kw.strip()]
+            patterns = [
+                r'"keywordList"\s*:\s*\[([^\]]*)\]',
+                r'"keywords"\s*:\s*\[([^\]]*)\]',
+                r'keywordList&quot;:\[([^\]]*)\]'
+            ]
+            
+            keywords = []
+            
+            for pattern in patterns:
+                match = re.search(pattern, html, re.DOTALL)
+                if match:
+                    keywords_raw = match.group(1)
                     
-                    if keywords:
-                        return {
-                            "success": True,
-                            "place_id": place_id,
-                            "keywords": keywords
-                        }
+                    # JSON 파싱 시도
+                    try:
+                        # 따옴표 정규화
+                        keywords_raw = keywords_raw.replace('\\"', '"')
+                        keywords_raw = keywords_raw.replace("'", '"')
+                        
+                        # JSON 배열로 파싱
+                        keywords_json = f'[{keywords_raw}]'
+                        keywords_json = keywords_json.encode('utf-8').decode('unicode_escape')
+                        
+                        import json
+                        keywords = json.loads(keywords_json)
+                        
+                        if keywords:
+                            break
+                    except:
+                        # 정규식으로 추출
+                        keywords_raw_decoded = keywords_raw.encode('utf-8').decode('unicode_escape')
+                        keywords = re.findall(r'"([^"]+)"', keywords_raw_decoded)
+                        
+                        if keywords:
+                            break
+            
+            if keywords:
+                # 빈 문자열 및 이상한 값 제거
+                keywords = [kw.strip() for kw in keywords if kw.strip() and len(kw) < 50]
+                
+                if keywords:
+                    return {
+                        "success": True,
+                        "place_id": place_id,
+                        "keywords": keywords
+                    }
             
             return {
                 "success": False,
