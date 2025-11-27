@@ -517,71 +517,108 @@ def get_lotto_fallback():
 
 
 #############################################
-# 기능 7: 대표키워드 조회 (API 방식)
+# 기능 7: 대표키워드 조회 (네이버 플레이스)
 #############################################
 def get_place_keywords(place_id):
-    """네이버 플레이스 대표키워드 추출 - API 방식"""
+    """네이버 플레이스 대표키워드 추출"""
     
-    # 네이버 플레이스 내부 API
-    url = f"https://m.place.naver.com/restaurant/{place_id}/home"
+    import json
+    
+    # 네이버 플레이스 GraphQL API 사용
+    url = "https://pcmap-api.place.naver.com/graphql"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.8,en-US;q=0.5,en;q=0.3",
-        "Connection": "keep-alive",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": f"https://pcmap.place.naver.com/restaurant/{place_id}/home",
+        "Origin": "https://pcmap.place.naver.com"
+    }
+    
+    # GraphQL 쿼리
+    query = """
+    query getRestaurant($input: RestaurantInput) {
+        restaurant(input: $input) {
+            keywords
+        }
+    }
+    """
+    
+    payload = {
+        "operationName": "getRestaurant",
+        "query": query,
+        "variables": {
+            "input": {
+                "id": place_id
+            }
+        }
     }
     
     try:
-        session = requests.Session()
-        response = session.get(url, headers=headers, timeout=15)
-        response.encoding = 'utf-8'
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
         
         if response.status_code == 200:
-            html = response.text
+            data = response.json()
             
-            # 방법 1: JSON 데이터에서 직접 추출
-            # window.__APOLLO_STATE__ 또는 __NEXT_DATA__ 에서 찾기
+            if "data" in data and "restaurant" in data["data"]:
+                restaurant = data["data"]["restaurant"]
+                if restaurant and "keywords" in restaurant:
+                    keywords = restaurant["keywords"]
+                    if keywords and len(keywords) > 0:
+                        return {
+                            "success": True,
+                            "place_id": place_id,
+                            "keywords": keywords
+                        }
+        
+        # GraphQL 실패시 HTML 파싱 방식 시도
+        return get_place_keywords_html(place_id)
             
-            patterns = [
-                r'"keywordList"\s*:\s*\[([^\]]*)\]',
-                r'"keywords"\s*:\s*\[([^\]]*)\]',
-                r'keywordList&quot;:\[([^\]]*)\]'
-            ]
-            
-            keywords = []
-            
-            for pattern in patterns:
-                match = re.search(pattern, html, re.DOTALL)
-                if match:
-                    keywords_raw = match.group(1)
-                    
-                    # JSON 파싱 시도
-                    try:
-                        # 따옴표 정규화
-                        keywords_raw = keywords_raw.replace('\\"', '"')
-                        keywords_raw = keywords_raw.replace("'", '"')
-                        
-                        # JSON 배열로 파싱
-                        keywords_json = f'[{keywords_raw}]'
-                        keywords_json = keywords_json.encode('utf-8').decode('unicode_escape')
-                        
-                        import json
-                        keywords = json.loads(keywords_json)
-                        
-                        if keywords:
-                            break
-                    except:
-                        # 정규식으로 추출
-                        keywords_raw_decoded = keywords_raw.encode('utf-8').decode('unicode_escape')
-                        keywords = re.findall(r'"([^"]+)"', keywords_raw_decoded)
-                        
-                        if keywords:
-                            break
-            
-            if keywords:
-                # 빈 문자열 및 이상한 값 제거
-                keywords = [kw.strip() for kw in keywords if kw.strip() and len(kw) < 50]
+    except Exception as e:
+        # 예외 발생시 HTML 파싱 방식 시도
+        return get_place_keywords_html(place_id)
+
+
+def get_place_keywords_html(place_id):
+    """HTML 파싱 방식 (백업)"""
+    
+    import json
+    
+    url = f"https://m.place.naver.com/restaurant/{place_id}/home"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            return {
+                "success": False,
+                "error": f"페이지 조회 실패 (코드: {response.status_code})"
+            }
+        
+        # 바이트로 받아서 직접 디코딩
+        content = response.content
+        
+        # UTF-8로 디코딩
+        try:
+            html = content.decode('utf-8')
+        except:
+            html = content.decode('utf-8', errors='ignore')
+        
+        # __NEXT_DATA__ JSON 찾기
+        next_data_pattern = r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>'
+        next_match = re.search(next_data_pattern, html, re.DOTALL)
+        
+        if next_match:
+            try:
+                json_str = next_match.group(1)
+                data = json.loads(json_str)
+                
+                # keywords 찾기 (중첩된 구조 탐색)
+                keywords = find_keywords_in_json(data)
                 
                 if keywords:
                     return {
@@ -589,28 +626,74 @@ def get_place_keywords(place_id):
                         "place_id": place_id,
                         "keywords": keywords
                     }
-            
-            return {
-                "success": False,
-                "error": "대표키워드를 찾을 수 없습니다.\n\n가능한 원인:\n• 잘못된 플레이스 ID\n• 음식점이 아닌 업종\n• 대표키워드 미등록 업체"
-            }
+            except:
+                pass
         
-        elif response.status_code == 404:
-            return {
-                "success": False,
-                "error": "존재하지 않는 플레이스 ID입니다."
-            }
-        else:
-            return {
-                "success": False,
-                "error": f"페이지 조회 실패 (코드: {response.status_code})"
-            }
+        # 일반 패턴 매칭
+        patterns = [
+            r'"keywordList"\s*:\s*\[(.*?)\]',
+            r'"keywords"\s*:\s*\[(.*?)\]',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, html, re.DOTALL)
+            if match:
+                try:
+                    keywords_str = match.group(1)
+                    # JSON 배열로 파싱
+                    keywords_json = f'[{keywords_str}]'
+                    keywords = json.loads(keywords_json)
+                    
+                    if keywords:
+                        return {
+                            "success": True,
+                            "place_id": place_id,
+                            "keywords": keywords
+                        }
+                except:
+                    continue
+        
+        return {
+            "success": False,
+            "error": "대표키워드를 찾을 수 없습니다.\n\n가능한 원인:\n• 잘못된 플레이스 ID\n• 음식점이 아닌 업종\n• 대표키워드 미등록 업체"
+        }
             
     except Exception as e:
         return {
             "success": False,
             "error": f"오류 발생: {str(e)}"
         }
+
+
+def find_keywords_in_json(obj, depth=0):
+    """JSON 객체에서 keywords 재귀적으로 찾기"""
+    
+    if depth > 20:  # 무한 재귀 방지
+        return None
+    
+    if isinstance(obj, dict):
+        # keywordList 또는 keywords 키 찾기
+        if "keywordList" in obj and isinstance(obj["keywordList"], list):
+            if len(obj["keywordList"]) > 0 and isinstance(obj["keywordList"][0], str):
+                return obj["keywordList"]
+        
+        if "keywords" in obj and isinstance(obj["keywords"], list):
+            if len(obj["keywords"]) > 0 and isinstance(obj["keywords"][0], str):
+                return obj["keywords"]
+        
+        # 재귀적으로 탐색
+        for key, value in obj.items():
+            result = find_keywords_in_json(value, depth + 1)
+            if result:
+                return result
+    
+    elif isinstance(obj, list):
+        for item in obj:
+            result = find_keywords_in_json(item, depth + 1)
+            if result:
+                return result
+    
+    return None
 
 
 def format_place_keywords(place_id):
