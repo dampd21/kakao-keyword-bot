@@ -318,7 +318,6 @@ def get_ad_cost(keyword):
     
     if mobile_success:
         mobile_estimates = mobile_perf["data"].get("estimate", [])
-        mobile_optimal = get_optimal_bid_info(mobile_estimates)
         
         response += f"""{'='*32}
 📱 모바일 광고 상세 분석
@@ -345,45 +344,88 @@ def get_ad_cost(keyword):
 
 """
             
-            # 최적 입찰가 추천
-            if mobile_optimal and mobile_optimal.get('best_value'):
-                best = mobile_optimal['best_value']
-                min_exp = mobile_optimal.get('min_exposure')
-                max_perf = mobile_optimal.get('max_performance')
-                
-                response += f"""{'='*32}
+            # 3단계 추천 (수정된 로직)
+            min_exp = None
+            balanced = None
+            max_perf = None
+            
+            # 1. 최소 노출 (첫 클릭 발생)
+            for est in display_estimates:
+                if est.get('clicks', 0) > 0:
+                    min_exp = est
+                    break
+            
+            # 2. 균형잡힌 운영 (월 클릭 20~30회 이상 또는 중간 구간)
+            target_clicks = max(20, total_click) if total_click > 0 else 20
+            for est in display_estimates:
+                clicks = est.get('clicks', 0)
+                if clicks >= target_clicks * 0.6:  # 목표의 60% 이상
+                    balanced = est
+                    break
+            
+            # 균형 못찾으면 중간값
+            if not balanced and len(display_estimates) >= 3:
+                balanced = display_estimates[len(display_estimates)//2]
+            elif not balanced:
+                balanced = display_estimates[-1] if display_estimates else None
+            
+            # 3. 최대 성과 (마지막)
+            max_perf = display_estimates[-1] if display_estimates else None
+            
+            response += f"""{'='*32}
 🎯 입찰가 추천 (모바일)
 {'='*32}
 
 """
+            
+            # 최소 노출
+            if min_exp:
+                min_bid = min_exp.get('bid', 0)
+                min_clicks = min_exp.get('clicks', 0)
+                min_cost = min_exp.get('cost', 0)
+                min_cpc = int(min_cost / min_clicks) if min_clicks > 0 else min_bid
                 
-                # 최소 노출 시작
-                if min_exp:
-                    min_bid = min_exp.get('bid', 0)
-                    response += f"""🟢 최소 노출: {format_number(min_bid)}원
-   └ 광고 노출 시작 구간
-
-"""
-                
-                # 가성비 최고
-                response += f"""🟡 추천 입찰가: {format_number(best['bid'])}원 ⭐
-   ├ 월 클릭: 약 {best['clicks']}회
-   ├ 실제 CPC: {format_number(int(best['cpc']))}원
-   └ 월 예산: {format_won(best['cost'])}
+                response += f"""🟢 최소 운영 (테스트용)
+   입찰가: {format_number(min_bid)}원
+   ├ 월 클릭: 약 {min_clicks}회
+   ├ 실제 CPC: {format_number(min_cpc)}원
+   └ 월 예산: {format_won(min_cost)}
    
-   💡 가성비가 가장 좋은 구간!
+   💬 효과 검증이 어려운 수준
 
 """
+            
+            # 균형 운영 (추천)
+            if balanced:
+                bal_bid = balanced.get('bid', 0)
+                bal_clicks = balanced.get('clicks', 0)
+                bal_cost = balanced.get('cost', 0)
+                bal_impressions = balanced.get('impressions', 0)
+                bal_cpc = int(bal_cost / bal_clicks) if bal_clicks > 0 else bal_bid
                 
-                # 최대 성과
-                if max_perf:
-                    max_bid = max_perf.get('bid', 0)
-                    max_clicks = max_perf.get('clicks', 0)
-                    max_cost = max_perf.get('cost', 0)
-                    max_cpc = int(max_cost / max_clicks) if max_clicks > 0 else max_bid
-                    
-                    response += f"""🔴 최대 노출: {format_number(max_bid)}원
+                response += f"""🟡 합리적 운영 (추천) ⭐
+   입찰가: {format_number(bal_bid)}원
+   ├ 월 클릭: 약 {bal_clicks}회
+   ├ 노출수: {format_number(bal_impressions)}회
+   ├ 실제 CPC: {format_number(bal_cpc)}원
+   └ 월 예산: {format_won(bal_cost)}
+   
+   💡 성과 측정이 가능한 최소 수준!
+
+"""
+            
+            # 최대 성과
+            if max_perf:
+                max_bid = max_perf.get('bid', 0)
+                max_clicks = max_perf.get('clicks', 0)
+                max_cost = max_perf.get('cost', 0)
+                max_impressions = max_perf.get('impressions', 0)
+                max_cpc = int(max_cost / max_clicks) if max_clicks > 0 else max_bid
+                
+                response += f"""🔴 공격적 운영 (최대 노출)
+   입찰가: {format_number(max_bid)}원
    ├ 월 클릭: 약 {max_clicks}회
+   ├ 노출수: {format_number(max_impressions)}회
    ├ 실제 CPC: {format_number(max_cpc)}원
    └ 월 예산: {format_won(max_cost)}
    
@@ -394,29 +436,37 @@ def get_ad_cost(keyword):
     # PC 분석
     if pc_success:
         pc_estimates = pc_perf["data"].get("estimate", [])
-        pc_optimal = get_optimal_bid_info(pc_estimates)
-        
         display_pc = [e for e in pc_estimates if e.get('clicks', 0) > 0]
         
-        if display_pc and pc_optimal and pc_optimal.get('best_value'):
-            best_pc = pc_optimal['best_value']
+        if display_pc:
+            # PC도 균형잡힌 구간 찾기
+            pc_balanced = None
+            if len(display_pc) >= 3:
+                pc_balanced = display_pc[len(display_pc)//2]
+            else:
+                pc_balanced = display_pc[-1] if display_pc else None
             
-            response += f"""{'='*32}
-💻 PC 광고 요약
+            if pc_balanced:
+                pc_bid = pc_balanced.get('bid', 0)
+                pc_clicks = pc_balanced.get('clicks', 0)
+                pc_cost = pc_balanced.get('cost', 0)
+                pc_cpc = int(pc_cost / pc_clicks) if pc_clicks > 0 else pc_bid
+                
+                response += f"""{'='*32}
+💻 PC 광고 추천
 {'='*32}
 
-🎯 추천 입찰가: {format_number(best_pc['bid'])}원
-├ 월 클릭: 약 {best_pc['clicks']}회
-├ 실제 CPC: {format_number(int(best_pc['cpc']))}원
-└ 월 예산: {format_won(best_pc['cost'])}
+🎯 합리적 운영
+   입찰가: {format_number(pc_bid)}원
+   ├ 월 클릭: 약 {pc_clicks}회
+   ├ 실제 CPC: {format_number(pc_cpc)}원
+   └ 월 예산: {format_won(pc_cost)}
 
 """
     
     # 키워드 도구 클릭수와 비교
-    if total_click > 0:
-        api_clicks = 0
-        if mobile_success and mobile_optimal and mobile_optimal.get('max_performance'):
-            api_clicks = mobile_optimal['max_performance'].get('clicks', 0)
+    if total_click > 0 and mobile_success:
+        api_clicks = max_perf.get('clicks', 0) if max_perf else 0
         
         diff_percent = ((total_click - api_clicks) / total_click * 100) if api_clicks > 0 else 0
         
@@ -443,30 +493,36 @@ def get_ad_cost(keyword):
             response += "✅ API 예측이 평균과 유사함\n\n"
     
     # 실전 운영 가이드
-    if mobile_success and mobile_optimal and mobile_optimal.get('best_value'):
-        best = mobile_optimal['best_value']
-        daily_budget = best['cost'] / 30
-        weekly_budget = best['cost'] / 4
+    if mobile_success and balanced:
+        bal_cost = balanced.get('cost', 0)
+        bal_bid = balanced.get('bid', 0)
+        bal_clicks = balanced.get('clicks', 0)
+        
+        daily_budget = max(bal_cost / 30, 3000)  # 최소 3,000원
+        weekly_budget = daily_budget * 7
+        monthly_budget = bal_cost
         
         response += f"""{'='*32}
 💼 실전 운영 가이드
 {'='*32}
 
-📅 추천 예산 (가성비 기준)
+📅 추천 예산 (합리적 운영 기준)
 ├ 일 예산: {format_won(daily_budget)}
 ├ 주 예산: {format_won(weekly_budget)}
-└ 월 예산: {format_won(best['cost'])}
+└ 월 예산: {format_won(monthly_budget)}
 
 🎯 시작 전략
-1️⃣ 입찰가: {format_number(best['bid'])}원으로 시작
-2️⃣ 일예산: {format_won(daily_budget * 1.2)} 설정
-3️⃣ 3일 후 성과 확인
+1️⃣ 입찰가: {format_number(bal_bid)}원으로 시작
+2️⃣ 일예산: {format_won(daily_budget)} 설정
+3️⃣ 1주일 후 성과 확인
 4️⃣ CTR 2% 이상이면 입찰가 상향
+5️⃣ 전환 발생 시 예산 증액
 
 ⚠️ 주의사항
-• 경쟁 상황에 따라 실제 비용 변동
-• 광고 품질에 따라 CPC 달라짐
-• 최소 1주일 테스트 후 최적화
+• 최소 월 {bal_clicks}회 클릭은 되어야 효과 측정 가능
+• 광고 품질점수에 따라 CPC 변동
+• 경쟁사 입찰에 따라 순위 변동
+• 2주 이상 운영 후 최적화 권장
 
 """
     
@@ -475,6 +531,7 @@ def get_ad_cost(keyword):
 {'='*32}"""
     
     return response
+
 
 
 #############################################
