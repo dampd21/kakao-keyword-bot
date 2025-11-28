@@ -328,11 +328,15 @@ def get_ad_cost(keyword):
     mobile_success = mobile_perf.get("success", False)
     pc_success = pc_perf.get("success", False)
     
+    has_ad_data = False
+    analysis = None
+    
     if mobile_success:
         mobile_estimates = mobile_perf["data"].get("estimate", [])
         analysis = get_optimal_bid_analysis(mobile_estimates)
         
         if analysis:
+            has_ad_data = True
             valid_estimates = analysis['all_estimates']
             
             response += f"""━━━━━━━━━━━━━━
@@ -402,6 +406,7 @@ def get_ad_cost(keyword):
         pc_analysis = get_optimal_bid_analysis(pc_estimates)
         
         if pc_analysis and pc_analysis.get('best_efficiency'):
+            has_ad_data = True
             pc_eff = pc_analysis['best_efficiency']['data']
             pc_clicks = pc_eff.get('clicks', 0)
             
@@ -427,7 +432,22 @@ def get_ad_cost(keyword):
 
 """
     
-    if mobile_success and analysis and analysis.get('best_efficiency'):
+    # 광고 데이터가 없는 경우 안내 메시지
+    if not has_ad_data:
+        response += f"""━━━━━━━━━━━━━━
+📱 광고 단가 정보
+━━━━━━━━━━━━━━
+
+⚠️ 검색량이 적어 예상 클릭 데이터가 없습니다.
+
+💡 참고 가이드:
+• 검색량 {format_number(total_qc)}회 기준
+• 예상 입찰가: 100~500원 시작 권장
+• 일 예산: 5,000~10,000원 시작
+• 1-2주 운영 후 데이터 보고 조정
+
+━━━━━━━━━━━━━━"""
+    elif mobile_success and analysis and analysis.get('best_efficiency'):
         eff_data = analysis['best_efficiency']['data']
         eff_cost = eff_data.get('cost', 0)
         eff_bid = eff_data.get('bid', 0)
@@ -966,7 +986,6 @@ def kakao_skill():
         
         # 운세 (생년월일 포함)
         elif lower_input.startswith("운세 "):
-            # "운세 870114" 또는 "운세 19870114" 형태
             birthdate = ''.join(filter(str.isdigit, user_utterance))
             if birthdate and len(birthdate) in [6, 8]:
                 response_text = get_fortune(birthdate)
