@@ -54,6 +54,10 @@ def format_won(value):
     else:
         return f"{format_number(int(value))}원"
 
+def clean_keyword(keyword):
+    """키워드 내 띄어쓰기 제거"""
+    return keyword.replace(" ", "")
+
 
 #############################################
 # 네이버 검색광고 API
@@ -993,6 +997,7 @@ def kakao_skill():
         # 연관 키워드
         elif lower_input.startswith("연관 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
+            keyword = clean_keyword(keyword)  # 키워드 내 띄어쓰기 제거
             if keyword:
                 response_text = get_related_keywords(keyword)
             else:
@@ -1001,6 +1006,7 @@ def kakao_skill():
         # 광고 단가
         elif lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
+            keyword = clean_keyword(keyword)  # 키워드 내 띄어쓰기 제거
             if keyword:
                 response_text = get_ad_cost(keyword)
             else:
@@ -1009,6 +1015,7 @@ def kakao_skill():
         # 블로그 상위글
         elif lower_input.startswith("블로그 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
+            keyword = clean_keyword(keyword)  # 키워드 내 띄어쓰기 제거
             if keyword:
                 response_text = get_blog_titles(keyword)
             else:
@@ -1016,7 +1023,8 @@ def kakao_skill():
         
         # 기본: 검색량 조회
         else:
-            response_text = get_search_volume(user_utterance)
+            keyword = clean_keyword(user_utterance)  # 키워드 내 띄어쓰기 제거
+            response_text = get_search_volume(keyword)
         
         return create_kakao_response(response_text)
         
