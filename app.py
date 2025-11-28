@@ -136,6 +136,27 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
         return {"success": False, "error": str(e)}
 
 
+def get_average_position_bid(keyword):
+    """순위별 예상 입찰가 조회"""
+    try:
+        uri = '/estimate/average-position-bid/keyword'
+        url = f'https://api.searchad.naver.com{uri}'
+        headers = get_naver_api_headers('POST', uri)
+        
+        payload = {
+            "device": "PC",
+            "items": [{"key": keyword}]
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
+        
+        if response.status_code == 200:
+            return {"success": True, "data": response.json(), "device": "PC"}
+        return {"success": False, "error": response.text}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def get_optimal_bid_analysis(estimates):
     if not estimates:
         return None
@@ -229,9 +250,14 @@ def get_optimal_bid_analysis(estimates):
 
 
 #############################################
-# 기능 1: 검색량 조회
+# 기능 1: 검색량 조회 (다중 키워드 지원)
 #############################################
 def get_search_volume(keyword):
+    # 쉼표로 구분된 다중 키워드 처리
+    if "," in keyword:
+        keywords = [k.strip() for k in keyword.split(",")][:5]
+        return get_multi_search_volume(keywords)
+    
     result = get_keyword_data(keyword)
     
     if not result["success"]:
@@ -257,8 +283,44 @@ def get_search_volume(keyword):
 ※ 다른 명령어: "도움말" 입력"""
 
 
+def get_multi_search_volume(keywords):
+    """다중 키워드 검색량 조회"""
+    response = f"""🔍 키워드 검색량 비교 ({len(keywords)}개)
+
+━━━━━━━━━━━━━━
+"""
+    
+    for keyword in keywords:
+        keyword = keyword.replace(" ", "")
+        result = get_keyword_data(keyword)
+        
+        if result["success"]:
+            kw = result["data"][0]
+            pc = parse_count(kw.get("monthlyPcQcCnt"))
+            mobile = parse_count(kw.get("monthlyMobileQcCnt"))
+            total = pc + mobile
+            comp = kw.get("compIdx", "")
+            comp_mark = {"높음": "🔴", "중간": "🟡"}.get(comp, "🟢")
+            
+            response += f"""
+📌 {kw.get('relKeyword', keyword)}
+   총 {format_number(total)}회 (M:{format_number(mobile)} / P:{format_number(pc)}) {comp_mark}
+"""
+        else:
+            response += f"""
+📌 {keyword}
+   ❌ 조회 실패
+"""
+    
+    response += """
+━━━━━━━━━━━━━━
+💡 쉼표(,)로 최대 5개까지 비교 가능"""
+    
+    return response
+
+
 #############################################
-# 기능 2: 연관 키워드 조회
+# 기능 2: 연관 키워드 조회 (10개 + 검색량)
 #############################################
 def get_related_keywords(keyword):
     result = get_keyword_data(keyword)
@@ -266,13 +328,14 @@ def get_related_keywords(keyword):
     if not result["success"]:
         return f"조회 실패: {result['error']}"
     
-    keyword_list = result["data"][:6]
+    keyword_list = result["data"][:10]  # 최대 10개
     
     response = f"""🔗 "{keyword}" 연관 키워드
 
+━━━━━━━━━━━━━━
 """
     
-    for i, kw in enumerate(keyword_list[:5], 1):
+    for i, kw in enumerate(keyword_list, 1):
         name = kw.get("relKeyword", "")
         pc = parse_count(kw.get("monthlyPcQcCnt"))
         mobile = parse_count(kw.get("monthlyMobileQcCnt"))
@@ -281,13 +344,17 @@ def get_related_keywords(keyword):
         
         comp_mark = {"높음": "🔴", "중간": "🟡"}.get(comp, "🟢")
         
-        response += f"{i}. {name}\n   {format_number(total)}회 {comp_mark}\n\n"
+        response += f"{i}. {name} ({format_number(total)}) {comp_mark}\n"
     
-    return response.strip()
+    response += """
+━━━━━━━━━━━━━━
+※ 괄호 안은 월간 검색량"""
+    
+    return response
 
 
 #############################################
-# 기능 3: 광고 단가 조회
+# 기능 3: 광고 단가 조회 (순위별 입찰가 추가)
 #############################################
 def get_ad_cost(keyword):
     result = get_keyword_data(keyword)
@@ -321,6 +388,11 @@ def get_ad_cost(keyword):
 
 """
     
+    # 순위별 입찰가 조회
+    position_result = get_position_bid(keyword_name)
+    if position_result:
+        response += position_result
+    
     test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
     mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
     pc_perf = get_performance_estimate(keyword_name, test_bids, 'PC')
@@ -340,7 +412,7 @@ def get_ad_cost(keyword):
             valid_estimates = analysis['all_estimates']
             
             response += f"""━━━━━━━━━━━━━━
-📱 모바일 광고 단가
+📱 모바일 성과 분석
 ━━━━━━━━━━━━━━
 
 입찰가별 예상 성과
@@ -415,7 +487,7 @@ def get_ad_cost(keyword):
                 pc_cost = pc_eff.get('cost', 0)
                 
                 response += f"""━━━━━━━━━━━━━━
-💻 PC 광고
+💻 PC 예상 성과
 ━━━━━━━━━━━━━━
 
 추천: {format_number(pc_bid)}원
@@ -432,7 +504,6 @@ def get_ad_cost(keyword):
 
 """
     
-    # 광고 데이터가 없는 경우 안내 메시지
     if not has_ad_data:
         response += f"""━━━━━━━━━━━━━━
 📱 광고 단가 정보
@@ -473,10 +544,127 @@ def get_ad_cost(keyword):
     return response
 
 
+def get_position_bid(keyword):
+    """순위별 입찰가 조회"""
+    try:
+        # PC 순위별 입찰가
+        uri = '/estimate/average-position-bid/keyword'
+        url = f'https://api.searchad.naver.com{uri}'
+        
+        pc_headers = get_naver_api_headers('POST', uri)
+        pc_payload = {"device": "PC", "items": [{"key": keyword}]}
+        pc_response = requests.post(url, headers=pc_headers, json=pc_payload, timeout=5)
+        
+        mobile_headers = get_naver_api_headers('POST', uri)
+        mobile_payload = {"device": "MOBILE", "items": [{"key": keyword}]}
+        mobile_response = requests.post(url, headers=mobile_headers, json=mobile_payload, timeout=5)
+        
+        if pc_response.status_code != 200 and mobile_response.status_code != 200:
+            return None
+        
+        result = f"""━━━━━━━━━━━━━━
+🏆 순위별 입찰가
+━━━━━━━━━━━━━━
+
+"""
+        
+        pc_data = None
+        mobile_data = None
+        
+        if pc_response.status_code == 200:
+            pc_json = pc_response.json()
+            if pc_json.get("estimate") and len(pc_json["estimate"]) > 0:
+                pc_data = pc_json["estimate"][0].get("bid", {})
+        
+        if mobile_response.status_code == 200:
+            mobile_json = mobile_response.json()
+            if mobile_json.get("estimate") and len(mobile_json["estimate"]) > 0:
+                mobile_data = mobile_json["estimate"][0].get("bid", {})
+        
+        if not pc_data and not mobile_data:
+            return None
+        
+        positions = ["1", "2", "3", "4", "5"]
+        
+        for pos in positions:
+            pc_bid = pc_data.get(pos, 0) if pc_data else 0
+            mobile_bid = mobile_data.get(pos, 0) if mobile_data else 0
+            
+            if pc_bid > 0 or mobile_bid > 0:
+                result += f"{pos}위: PC {format_number(int(pc_bid))}원 / M {format_number(int(mobile_bid))}원\n"
+        
+        result += "\n"
+        return result
+        
+    except Exception as e:
+        return None
+
+
 #############################################
-# 기능 4: 블로그 상위 5개 제목
+# 기능 4: 블로그 상위 5개 제목 (실제 VIEW 탭)
 #############################################
 def get_blog_titles(keyword):
+    """실제 네이버 VIEW 탭 상위 블로그 조회"""
+    try:
+        # 네이버 검색 VIEW 탭 스크래핑
+        url = f"https://search.naver.com/search.naver?where=view&query={requests.utils.quote(keyword)}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            html = response.text
+            
+            # 블로그 제목 추출 (VIEW 탭)
+            titles = []
+            
+            # 패턴 1: api_txt_lines 클래스
+            pattern1 = re.findall(r'class="api_txt_lines[^"]*"[^>]*>([^<]+)</a>', html)
+            
+            # 패턴 2: title_link 클래스
+            pattern2 = re.findall(r'class="title_link[^"]*"[^>]*>([^<]+)', html)
+            
+            # 패턴 3: 일반 제목 패턴
+            pattern3 = re.findall(r'<a[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</a>', html)
+            
+            all_titles = pattern1 + pattern2 + pattern3
+            
+            # 중복 제거 및 정제
+            seen = set()
+            for title in all_titles:
+                title = title.strip()
+                title = re.sub(r'<[^>]+>', '', title)  # HTML 태그 제거
+                if title and len(title) > 5 and title not in seen:
+                    seen.add(title)
+                    titles.append(title)
+                    if len(titles) >= 5:
+                        break
+            
+            if titles:
+                result = f"""📝 "{keyword}" VIEW 상위 5개
+
+"""
+                for i, title in enumerate(titles[:5], 1):
+                    result += f"{i}. {title}\n\n"
+                
+                result += """━━━━━━━━━━━━━━
+※ 실제 네이버 VIEW 탭 기준"""
+                return result
+        
+        # 스크래핑 실패시 API 사용
+        return get_blog_titles_api(keyword)
+        
+    except Exception as e:
+        return get_blog_titles_api(keyword)
+
+
+def get_blog_titles_api(keyword):
+    """네이버 검색 API로 블로그 조회 (백업)"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         return f"""📝 "{keyword}" 블로그 분석
 
@@ -517,7 +705,7 @@ def get_blog_titles(keyword):
 """
                 
                 result += """━━━━━━━━━━━━━━
-※ 상위 제목 패턴을 분석해보세요"""
+※ 네이버 검색 API 기준"""
                 
                 return result
             else:
@@ -541,7 +729,6 @@ def get_fortune(birthdate=None):
     headers = {"Content-Type": "application/json"}
     
     if birthdate:
-        # 생년월일 파싱
         if len(birthdate) == 6:
             year = birthdate[:2]
             month = birthdate[2:4]
@@ -877,6 +1064,89 @@ URL의 숫자 부분이 ID입니다
 
 
 #############################################
+# 기능 8: 자동완성 키워드 조회
+#############################################
+def get_autocomplete(keyword):
+    """네이버 자동완성 키워드 조회 - 띄어쓰기 유지"""
+    try:
+        # 네이버 자동완성 API (띄어쓰기 유지)
+        url = f"https://ac.search.naver.com/nx/ac"
+        
+        params = {
+            "q": keyword,  # 원본 키워드 (띄어쓰기 포함)
+            "con": "1",
+            "frm": "nv",
+            "ans": "2",
+            "r_format": "json",
+            "r_enc": "UTF-8",
+            "r_unicode": "0",
+            "t_koreng": "1",
+            "run": "2",
+            "rev": "4",
+            "q_enc": "UTF-8"
+        }
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.naver.com/"
+        }
+        
+        response = requests.get(url, params=params, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # 자동완성 결과 추출
+            items = data.get("items", [])
+            suggestions = []
+            
+            for item_group in items:
+                if isinstance(item_group, list):
+                    for item in item_group:
+                        if isinstance(item, list) and len(item) > 0:
+                            suggestions.append(item[0])
+                        elif isinstance(item, str):
+                            suggestions.append(item)
+            
+            # 중복 제거 및 10개 제한
+            seen = set()
+            unique_suggestions = []
+            for s in suggestions:
+                if s not in seen and s != keyword:
+                    seen.add(s)
+                    unique_suggestions.append(s)
+                    if len(unique_suggestions) >= 10:
+                        break
+            
+            if unique_suggestions:
+                result = f"""🔤 "{keyword}" 자동완성어
+
+━━━━━━━━━━━━━━
+"""
+                for i, suggestion in enumerate(unique_suggestions, 1):
+                    result += f"{i}. {suggestion}\n"
+                
+                result += f"""
+━━━━━━━━━━━━━━
+💡 총 {len(unique_suggestions)}개 자동완성어
+※ 띄어쓰기에 따라 결과가 다릅니다"""
+                
+                return result
+            else:
+                return f"""🔤 "{keyword}" 자동완성어
+
+자동완성 결과가 없습니다.
+
+━━━━━━━━━━━━━━
+💡 다른 키워드로 시도해보세요"""
+        
+        return f"자동완성 조회 실패 (상태: {response.status_code})"
+        
+    except Exception as e:
+        return f"자동완성 조회 오류: {str(e)}"
+
+
+#############################################
 # 도움말
 #############################################
 def get_help():
@@ -889,6 +1159,7 @@ def get_help():
 🔍 검색량 조회
 → 키워드만 입력
 예) 맛집
+예) 맛집,카페,병원 (최대5개)
 
 🔗 연관 키워드
 → "연관" + 키워드
@@ -901,6 +1172,11 @@ def get_help():
 📝 블로그 상위글
 → "블로그" + 키워드
 예) 블로그 맛집
+
+🔤 자동완성어
+→ "자동" + 키워드
+예) 자동 부평맛집
+예) 자동 부평 맛집
 
 🏷️ 대표키워드
 → "대표" + 플레이스ID
@@ -1009,6 +1285,27 @@ def kakao_skill():
         elif lower_input in ["로또", "로또번호", "로또 번호", "lotto", "번호추천", "번호 추천"]:
             response_text = get_lotto()
         
+        # 자동완성 키워드 (띄어쓰기 유지!)
+        elif lower_input.startswith("자동 ") or lower_input.startswith("자동완성 "):
+            if lower_input.startswith("자동완성 "):
+                keyword = user_utterance[5:].strip()  # "자동완성 " 이후
+            else:
+                keyword = user_utterance[3:].strip()  # "자동 " 이후
+            
+            if keyword:
+                response_text = get_autocomplete(keyword)  # 띄어쓰기 유지
+            else:
+                response_text = """🔤 자동완성어 조회
+
+키워드를 입력해주세요
+
+━━━━━━━━━━━━━━
+예) 자동 부평맛집
+예) 자동 부평 맛집
+
+━━━━━━━━━━━━━━
+💡 띄어쓰기에 따라 결과가 다릅니다"""
+        
         # 대표키워드
         elif lower_input.startswith("대표 ") or lower_input.startswith("대표키워드 "):
             place_id = ''.join(filter(str.isdigit, user_utterance))
@@ -1055,10 +1352,15 @@ URL에서 숫자가 ID입니다"""
             else:
                 response_text = "키워드를 입력해주세요\n예) 블로그 맛집"
         
-        # 기본: 검색량 조회
+        # 기본: 검색량 조회 (쉼표 구분 다중 키워드 지원)
         else:
-            keyword = clean_keyword(user_utterance)
-            response_text = get_search_volume(keyword)
+            keyword = user_utterance.strip()
+            # 쉼표가 있으면 다중 키워드, 없으면 단일 키워드
+            if "," in keyword:
+                response_text = get_search_volume(keyword)  # 띄어쓰기 유지하고 쉼표로 분리
+            else:
+                keyword = clean_keyword(keyword)
+                response_text = get_search_volume(keyword)
         
         return create_kakao_response(response_text)
         
