@@ -686,11 +686,12 @@ def get_place_keywords(place_id):
         debug_info.append(f"status: {response.status_code}")
         
         if response.status_code == 200:
-            # 인코딩 명시적 설정
+            # 핵심 수정: content를 직접 UTF-8로 디코딩
             try:
-    html = response.content.decode('utf-8')
-except:
-    html = response.content.decode('utf-8', errors='ignore')
+                html = response.content.decode('utf-8')
+            except:
+                html = response.content.decode('utf-8', errors='ignore')
+            
             debug_info.append(f"html 길이: {len(html)}")
             
             # keywordList 찾기
@@ -701,7 +702,6 @@ except:
                     keywords_str = "[" + match.group(1) + "]"
                     keywords = json.loads(keywords_str)
                     if keywords and len(keywords) > 0:
-                        # 키워드 샘플 확인
                         debug_info.append(f"첫번째 키워드: {keywords[0]}")
                         return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
                 except Exception as e:
@@ -732,8 +732,11 @@ except:
             response = requests.get(alt_url, headers=headers, timeout=5)
             
             if response.status_code == 200:
-                response.encoding = 'utf-8'
-                html = response.text
+                # 여기도 동일하게 수정
+                try:
+                    html = response.content.decode('utf-8')
+                except:
+                    html = response.content.decode('utf-8', errors='ignore')
                 
                 match = re.search(r'"keywordList"\s*:\s*\[((?:"[^"]*",?\s*)*)\]', html)
                 if match:
@@ -749,7 +752,6 @@ except:
             pass
     
     return {"success": False, "error": "대표키워드를 찾을 수 없습니다.", "debug": debug_info}
-
 
 def format_place_keywords(place_id):
     result = get_place_keywords(place_id)
