@@ -8,10 +8,15 @@ import os
 import random
 import re
 import json
+import logging
 from datetime import date, timedelta
 from urllib.parse import quote
 
 app = Flask(__name__)
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 #############################################
 # 환경변수 설정
@@ -171,7 +176,7 @@ def get_keyword_data(keyword):
     }
 
     try:
-        response = requests.get(base_url + uri, headers=headers, params=params, timeout=5)
+        response = requests.get(base_url + uri, headers=headers, params=params, timeout=4)
 
         if response.status_code == 200:
             data = response.json()
@@ -185,6 +190,7 @@ def get_keyword_data(keyword):
             return {"success": False, "error": f"검색광고 API 오류 ({response.status_code})"}
 
     except Exception as e:
+        logger.error(f"검색광고 API 오류: {str(e)}")
         return {"success": False, "error": str(e)}
 
 
@@ -204,12 +210,13 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
             "bids": bids if isinstance(bids, list) else [bids]
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=5)
+        response = requests.post(url, headers=headers, json=payload, timeout=4)
 
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
         return {"success": False, "status": response.status_code, "error": response.text}
     except Exception as e:
+        logger.error(f"CPC API 오류: {str(e)}")
         return {"success": False, "error": str(e)}
 
 
@@ -310,8 +317,10 @@ def get_optimal_bid_analysis(estimates):
 #############################################
 def get_search_volume(keyword):
     if "," in keyword:
-        keywords = [k.strip() for k in keyword.split(",")][:5]
-        return get_multi_search_volume(keywords)
+        keywords = [k.strip() for k in keyword.split(",")]
+        if len(keywords) > 5:
+            return "최대 5개 키워드까지만 조회 가능합니다.\n예) 키워드1,키워드2,키워드3"
+        return get_multi_search_volume(keywords[:5])
 
     result = get_keyword_data(keyword)
 
@@ -385,7 +394,7 @@ def get_related_keywords(keyword):
             "Accept-Language": "ko-KR,ko;q=0.9"
         }
 
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=4)
 
         if response.status_code == 200:
             html = response.text
@@ -422,7 +431,8 @@ def get_related_keywords(keyword):
         # 스크래핑 실패 시 광고 API 사용
         return get_related_keywords_api(keyword)
 
-    except Exception:
+    except Exception as e:
+        logger.error(f"연관검색어 스크래핑 오류: {str(e)}")
         return get_related_keywords_api(keyword)
 
 
@@ -672,7 +682,7 @@ def get_datalab_trend(keyword):
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=5)
+        response = requests.post(url, headers=headers, json=payload, timeout=4)
         if response.status_code != 200:
             return {"success": False, "error": f"DataLab 오류 ({response.status_code})"}
 
@@ -688,6 +698,7 @@ def get_datalab_trend(keyword):
         return {"success": True, "data": series}
 
     except Exception as e:
+        logger.error(f"DataLab API 오류: {str(e)}")
         return {"success": False, "error": str(e)}
 
 
@@ -739,7 +750,7 @@ def analyze_serp_structure(keyword):
             "Accept-Language": "ko-KR,ko;q=0.9"
         }
 
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=4)
         if response.status_code != 200:
             return f"SERP 분석 실패 (HTTP {response.status_code})"
 
@@ -779,6 +790,7 @@ def analyze_serp_structure(keyword):
         return "\n".join(lines)
 
     except Exception as e:
+        logger.error(f"SERP 분석 오류: {str(e)}")
         return f"SERP 분석 중 오류: {str(e)}"
 
 
@@ -935,7 +947,8 @@ def get_fortune(birthdate=None):
         else:
             return get_fortune_fallback(birthdate)
 
-    except Exception:
+    except Exception as e:
+        logger.error(f"Gemini API 오류: {str(e)}")
         return get_fortune_fallback(birthdate)
 
 
@@ -1049,7 +1062,8 @@ def get_lotto():
         else:
             return get_lotto_fallback()
 
-    except Exception:
+    except Exception as e:
+        logger.error(f"Gemini API 오류: {str(e)}")
         return get_lotto_fallback()
 
 
@@ -1125,7 +1139,7 @@ def get_place_keywords(place_id):
     }
 
     try:
-        response = requests.get(api_url, headers=headers, timeout=10)
+        response = requests.get(api_url, headers=headers, timeout=4)
         debug_info.append(f"status: {response.status_code}")
 
         if response.status_code == 200:
@@ -1168,7 +1182,7 @@ def get_place_keywords(place_id):
     for category in categories:
         try:
             alt_url = f"https://m.place.naver.com/{category}/{place_id}/home"
-            response = requests.get(alt_url, headers=headers, timeout=5)
+            response = requests.get(alt_url, headers=headers, timeout=4)
 
             if response.status_code == 200:
                 try:
@@ -1282,7 +1296,7 @@ def get_autocomplete(keyword):
             "Referer": "https://www.naver.com/"
         }
 
-        response = requests.get(ac_url, params=params, headers=headers, timeout=5)
+        response = requests.get(ac_url, params=params, headers=headers, timeout=4)
 
         if response.status_code == 200:
             data = response.json()
@@ -1334,7 +1348,8 @@ def get_autocomplete(keyword):
 
         return get_autocomplete_mobile(keyword)
 
-    except Exception:
+    except Exception as e:
+        logger.error(f"자동완성 API 오류: {str(e)}")
         return get_autocomplete_mobile(keyword)
 
 
@@ -1358,7 +1373,7 @@ def get_autocomplete_mobile(keyword):
             "Referer": "https://m.naver.com/"
         }
 
-        response = requests.get(url, params=params, headers=headers, timeout=5)
+        response = requests.get(url, params=params, headers=headers, timeout=4)
 
         if response.status_code == 200:
             data = response.json()
@@ -1394,8 +1409,8 @@ def get_autocomplete_mobile(keyword):
 총 {len(unique_suggestions)}개 자동완성어"""
 
                 return result
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"모바일 자동완성 API 오류: {str(e)}")
 
     return f"""[자동완성] {keyword}
 
@@ -1651,6 +1666,7 @@ def kakao_skill():
         return create_kakao_response(response_text)
 
     except Exception as e:
+        logger.error(f"스킬 처리 오류: {str(e)}")
         return create_kakao_response(f"오류 발생: {str(e)}")
 
 
@@ -1658,6 +1674,10 @@ def kakao_skill():
 # 카카오 응답 생성
 #############################################
 def create_kakao_response(text):
+    # 카카오톡 simpleText 최대 1000자 제한
+    if len(text) > 1000:
+        text = text[:997] + "..."
+
     return jsonify({
         "version": "2.0",
         "template": {
@@ -1670,6 +1690,11 @@ def create_kakao_response(text):
 # 서버 실행
 #############################################
 if __name__ == '__main__':
+    print("=== 환경변수 확인 ===")
+    print(f"검색광고 API: {'✅' if NAVER_API_KEY else '❌'}")
+    print(f"DataLab API: {'✅' if NAVER_CLIENT_ID else '❌'}")
+    print(f"Gemini API: {'✅' if GEMINI_API_KEY else '❌'}")
+    print("====================")
+
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-```
