@@ -69,17 +69,16 @@ def get_comp_text(comp):
 def is_guide_message(text):
     """사용 가이드 메시지인지 확인"""
     guide_indicators = [
-        "사용 가이드", "사용가이드", "──────",
-        "키워드 검색량", "연관 검색어", "CPC",
+        "사용 가이드", "사용가이드",
+        "키워드 검색량", "연관 검색어", "CPC 광고",
         "블로그 상위글", "자동완성어", "대표키워드",
-        "재미 기능", "경쟁도:", "키워드만 입력"
+        "재미 기능", "경쟁도:"
     ]
     
     count = sum(1 for indicator in guide_indicators if indicator in text)
     
-    if count >= 3:
-        return True
-    if len(text) > 200 and "──" in text:
+    # 4개 이상의 지표가 있으면 가이드 메시지
+    if count >= 4:
         return True
     
     return False
@@ -612,44 +611,35 @@ def get_blog_titles(keyword):
             
             titles = []
             
-            # 블로그 제목 패턴: sds-comps-text-type-headline1 클래스 안의 텍스트
-            # <mark> 태그 포함 가능
-            pattern1 = re.findall(r'sds-comps-text-type-headline1[^>]*>(.*?)</span>', html, re.DOTALL)
+            # 블로그 섹션 추출: <section class="sc_new sp_nblog _sp_nblog" ...>
+            blog_section_match = re.search(r'<section[^>]*class="[^"]*sp_nblog[^"]*"[^>]*>(.*?)</section>', html, re.DOTALL)
             
-            for match in pattern1:
-                # <mark> 태그 제거하고 텍스트만 추출
-                title = re.sub(r'<[^>]+>', '', match)
-                title = title.strip()
-                if title and len(title) > 3 and title not in titles:
-                    titles.append(title)
-                    if len(titles) >= 5:
-                        break
+            if blog_section_match:
+                blog_section = blog_section_match.group(1)
+                
+                # 블로그 제목 추출: sds-comps-text-type-headline1 클래스
+                pattern1 = re.findall(r'sds-comps-text-type-headline1[^>]*>(.*?)</span>', blog_section, re.DOTALL)
+                
+                for match in pattern1:
+                    # <mark> 태그 등 HTML 태그 제거
+                    title = re.sub(r'<[^>]+>', '', match)
+                    title = title.strip()
+                    if title and len(title) > 3 and title not in titles:
+                        titles.append(title)
+                        if len(titles) >= 5:
+                            break
             
-            # 패턴1 실패시 다른 패턴 시도
+            # 섹션에서 못 찾으면 전체에서 시도
             if len(titles) < 5:
-                # 모바일 버전 시도
-                mobile_url = f"https://m.search.naver.com/search.naver?where=m_blog&query={requests.utils.quote(keyword)}"
-                mobile_headers = {
-                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "ko-KR,ko;q=0.9"
-                }
+                pattern2 = re.findall(r'sds-comps-text-type-headline1[^>]*>(.*?)</span>', html, re.DOTALL)
                 
-                mobile_response = requests.get(mobile_url, headers=mobile_headers, timeout=10)
-                
-                if mobile_response.status_code == 200:
-                    mobile_html = mobile_response.text
-                    
-                    # 모바일 패턴
-                    pattern2 = re.findall(r'class="title_area"[^>]*>.*?<a[^>]*>([^<]+)</a>', mobile_html, re.DOTALL)
-                    pattern3 = re.findall(r'class="api_txt_lines[^"]*"[^>]*>([^<]+)</a>', mobile_html)
-                    
-                    for title in pattern2 + pattern3:
-                        title = title.strip()
-                        if title and len(title) > 3 and title not in titles:
-                            titles.append(title)
-                            if len(titles) >= 5:
-                                break
+                for match in pattern2:
+                    title = re.sub(r'<[^>]+>', '', match)
+                    title = title.strip()
+                    if title and len(title) > 3 and title not in titles:
+                        titles.append(title)
+                        if len(titles) >= 5:
+                            break
             
             if titles:
                 result = f"""[블로그] {keyword} 상위 5개
@@ -1392,9 +1382,9 @@ def kakao_skill():
         if not user_utterance:
             return create_kakao_response("검색할 키워드를 입력해주세요!")
         
-        # 사용 가이드 메시지 감지
+        # 사용 가이드 메시지 감지 - 이미 표시된 가이드이므로 무시
         if is_guide_message(user_utterance):
-            return create_kakao_response(get_help())
+            return create_kakao_response("위 가이드를 참고해서 명령어를 입력해주세요!")
         
         lower_input = user_utterance.lower()
         
