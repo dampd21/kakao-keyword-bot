@@ -669,55 +669,109 @@ def get_lotto_fallback():
 # 기능 7: 대표키워드 조회 (수정됨)
 #############################################
 def get_place_keywords(place_id):
-    """대표키워드 조회"""
+    """대표키워드 조회 - API 직접 호출"""
     debug_info = []
     
-    html_url = f"https://m.place.naver.com/restaurant/{place_id}/home"
+    # 방법 1: 네이버 플레이스 API 직접 호출
+    api_url = f"https://m.place.naver.com/restaurant/{place_id}/home"
     
-    # Accept-Encoding 제거하여 압축 없이 받기
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9"
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Accept-Encoding": "identity"  # 압축 없이 요청!
     }
     
     try:
-        response = requests.get(html_url, headers=headers, timeout=5)
+        response = requests.get(api_url, headers=headers, timeout=10)
         debug_info.append(f"status: {response.status_code}")
+        debug_info.append(f"encoding: {response.encoding}")
+        debug_info.append(f"content-type: {response.headers.get('Content-Type', 'N/A')}")
+        debug_info.append(f"content-encoding: {response.headers.get('Content-Encoding', 'none')}")
         
         if response.status_code == 200:
             html = response.text
             debug_info.append(f"html 길이: {len(html)}")
             
-            # keywordList 찾기
-            match = re.search(r'"keywordList"\s*:\s*\[([^\]]+)\]', html)
-            if match:
-                debug_info.append("keywordList 발견")
-                try:
-                    keywords_str = "[" + match.group(1) + "]"
-                    keywords = json.loads(keywords_str)
-                    if keywords and len(keywords) > 0:
-                        return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
-                except Exception as e:
-                    debug_info.append(f"파싱 오류: {str(e)}")
+            # HTML인지 확인
+            if html.strip().startswith('<!') or html.strip().startswith('<html'):
+                debug_info.append("HTML 형식 확인됨")
+            else:
+                debug_info.append(f"HTML 시작: {html[:100]}")
             
-            # keywords 찾기
-            match2 = re.search(r'"keywords"\s*:\s*\[([^\]]+)\]', html)
-            if match2:
-                debug_info.append("keywords 발견")
+            # 방법 1: __NEXT_DATA__ 에서 찾기
+            next_data_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.+?)</script>', html, re.DOTALL)
+            if next_data_match:
+                debug_info.append("__NEXT_DATA__ 발견")
                 try:
-                    keywords_str = "[" + match2.group(1) + "]"
-                    keywords = json.loads(keywords_str)
-                    if keywords and len(keywords) > 0:
-                        return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
+                    json_data = json.loads(next_data_match.group(1))
+                    # props.pageProps.initialState 등에서 키워드 찾기
+                    json_str = json.dumps(json_data)
+                    
+                    kw_match = re.search(r'"keywordList"\s*:\s*\[([^\]]*)\]', json_str)
+                    if kw_match:
+                        keywords_str = "[" + kw_match.group(1) + "]"
+                        keywords = json.loads(keywords_str)
+                        if keywords:
+                            return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
                 except Exception as e:
-                    debug_info.append(f"파싱 오류: {str(e)}")
+                    debug_info.append(f"NEXT_DATA 파싱 오류: {str(e)}")
+            
+            # 방법 2: 전체 HTML에서 keywordList 찾기
+            patterns = [
+                r'"keywordList"\s*:\s*\[((?:"[^"]+",?\s*)+)\]',
+                r'"keywords"\s*:\s*\[((?:"[^"]+",?\s*)+)\]',
+                r'keywordList["\']?\s*:\s*\[((?:["\'][^"\']+["\'],?\s*)+)\]'
+            ]
+            
+            for i, pattern in enumerate(patterns):
+                match = re.search(pattern, html)
+                if match:
+                    debug_info.append(f"패턴 {i+1} 발견: {match.group(0)[:100]}")
+                    try:
+                        keywords_str = "[" + match.group(1) + "]"
+                        keywords_str = keywords_str.replace("'", '"')
+                        keywords = json.loads(keywords_str)
+                        if keywords and len(keywords) > 0:
+                            return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
+                    except Exception as e:
+                        debug_info.append(f"파싱 오류: {str(e)}")
             
             debug_info.append("키워드 패턴 없음")
-            debug_info.append(f"HTML 앞 300자: {html[:300]}")
+            
+            # 디버깅: HTML 샘플 저장
+            if 'keyword' in html.lower():
+                idx = html.lower().find('keyword')
+                debug_info.append(f"keyword 위치 {idx}: ...{html[max(0,idx-20):idx+100]}...")
+            else:
+                debug_info.append("'keyword' 문자열 없음")
+                debug_info.append(f"HTML 앞 500자: {html[:500]}")
                     
     except Exception as e:
-        debug_info.append(f"오류: {str(e)}")
+        debug_info.append(f"요청 오류: {str(e)}")
+    
+    # 방법 2: place 카테고리로 재시도
+    categories = ['restaurant', 'place', 'cafe', 'hospital', 'beauty']
+    for category in categories[1:]:  # restaurant은 이미 시도함
+        try:
+            alt_url = f"https://m.place.naver.com/{category}/{place_id}/home"
+            response = requests.get(alt_url, headers=headers, timeout=5)
+            debug_info.append(f"{category} 시도: {response.status_code}")
+            
+            if response.status_code == 200:
+                html = response.text
+                for pattern in patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        try:
+                            keywords_str = "[" + match.group(1) + "]"
+                            keywords = json.loads(keywords_str)
+                            if keywords:
+                                return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
+                        except:
+                            pass
+        except:
+            pass
     
     return {"success": False, "error": "대표키워드를 찾을 수 없습니다.", "debug": debug_info}
 
