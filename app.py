@@ -95,7 +95,7 @@ def get_keyword_data(keyword):
     }
     
     try:
-        response = requests.get(base_url + uri, headers=headers, params=params, timeout=10)
+        response = requests.get(base_url + uri, headers=headers, params=params, timeout=5)
         
         if response.status_code == 200:
             data = response.json()
@@ -115,29 +115,7 @@ def get_keyword_data(keyword):
 #############################################
 # CPC API 함수들
 #############################################
-def get_exposure_minimum_bid(keyword, device='PC'):
-    try:
-        uri = '/npc-estimate/exposure-minimum-bid/keyword'
-        url = f'https://api.searchad.naver.com{uri}'
-        
-        headers = get_naver_api_headers('POST', uri)
-        payload = {"device": device, "items": [keyword]}
-        
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if 'estimate' in data:
-                for est in data.get('estimate', []):
-                    if est.get('keyword') == keyword:
-                        return est.get('bid', 0)
-        return 0
-    except:
-        return 0
-
-
 def get_performance_estimate(keyword, bids, device='MOBILE'):
-    """입찰가별 예상 실적 조회"""
     try:
         uri = '/estimate/performance/keyword'
         url = f'https://api.searchad.naver.com{uri}'
@@ -150,7 +128,7 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
             "bids": bids if isinstance(bids, list) else [bids]
         }
         
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
         
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
@@ -160,7 +138,6 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
 
 
 def get_optimal_bid_analysis(estimates):
-    """최적 입찰가 분석 - 효율 급락 직전 구간 찾기"""
     if not estimates:
         return None
     
@@ -432,7 +409,6 @@ def get_ad_cost(keyword):
             if pc_clicks >= 10:
                 pc_bid = pc_eff.get('bid', 0)
                 pc_cost = pc_eff.get('cost', 0)
-                pc_cpc = int(pc_cost / pc_clicks) if pc_clicks > 0 else pc_bid
                 
                 response += f"""━━━━━━━━━━━━━━━━━━━━━━━━
 💻 PC 광고
@@ -456,7 +432,6 @@ def get_ad_cost(keyword):
         eff_data = analysis['best_efficiency']['data']
         eff_cost = eff_data.get('cost', 0)
         eff_bid = eff_data.get('bid', 0)
-        eff_clicks = eff_data.get('clicks', 0)
         
         daily_budget = max(eff_cost / 30, 10000)
         
@@ -502,7 +477,7 @@ def get_blog_titles(keyword):
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers=headers, params=params, timeout=5)
         
         if response.status_code == 200:
             data = response.json()
@@ -576,7 +551,7 @@ def get_fortune():
     }
     
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=15)
+        response = requests.post(url, headers=headers, json=data, timeout=4)
         
         if response.status_code == 200:
             result = response.json()
@@ -658,7 +633,7 @@ def get_lotto():
     }
     
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=15)
+        response = requests.post(url, headers=headers, json=data, timeout=4)
         
         if response.status_code == 200:
             result = response.json()
@@ -692,43 +667,19 @@ def get_lotto_fallback():
 
 
 #############################################
-# 기능 7: 대표키워드 조회 (429 에러 대응 개선)
+# 기능 7: 대표키워드 조회 (빠른 버전)
 #############################################
-def get_place_headers():
-    """더 자연스러운 브라우저 헤더 생성"""
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
-    ]
-    
-    return {
-        "User-Agent": random.choice(user_agents),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "max-age=0"
-    }
-
-
 def get_place_keywords(place_id):
-    """대표키워드 조회 - GraphQL API 시도"""
+    """대표키워드 조회 - 빠른 단일 요청"""
+    
+    # 1. GraphQL API 먼저 시도 (가장 빠름)
     url = "https://pcmap-api.place.naver.com/graphql"
     
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": f"https://pcmap.place.naver.com/restaurant/{place_id}/home",
-        "Origin": "https://pcmap.place.naver.com",
-        "Accept": "*/*",
-        "Accept-Language": "ko-KR,ko;q=0.9"
+        "Origin": "https://pcmap.place.naver.com"
     }
     
     query = """
@@ -746,120 +697,71 @@ def get_place_keywords(place_id):
     }
     
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response = requests.post(url, headers=headers, json=payload, timeout=3)
         
         if response.status_code == 200:
             data = response.json()
             
-            if "data" in data and "restaurant" in data["data"]:
-                restaurant = data["data"]["restaurant"]
+            if "data" in data and data["data"]:
+                restaurant = data["data"].get("restaurant")
                 if restaurant and "keywords" in restaurant:
                     keywords = restaurant["keywords"]
                     if keywords and len(keywords) > 0:
                         return {"success": True, "place_id": place_id, "keywords": keywords}
-        
-        # GraphQL 실패 시 HTML 방식 시도
-        return get_place_keywords_html(place_id)
-            
     except:
-        return get_place_keywords_html(place_id)
-
-
-def get_place_keywords_html(place_id):
-    """대표키워드 조회 - HTML 스크래핑 (재시도 로직 포함)"""
+        pass
     
-    # 여러 URL 패턴 시도
-    url_patterns = [
-        f"https://m.place.naver.com/restaurant/{place_id}/home",
-        f"https://m.place.naver.com/place/{place_id}/home",
-        f"https://place.naver.com/restaurant/{place_id}/home"
-    ]
+    # 2. HTML 스크래핑 시도
+    try:
+        html_url = f"https://m.place.naver.com/restaurant/{place_id}/home"
+        
+        html_headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "ko-KR,ko;q=0.9"
+        }
+        
+        response = requests.get(html_url, headers=html_headers, timeout=3)
+        
+        if response.status_code == 200:
+            html = response.text
+            
+            # __NEXT_DATA__ 파싱
+            match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+            
+            if match:
+                json_data = json.loads(match.group(1))
+                keywords = find_keywords_in_json(json_data)
+                
+                if keywords:
+                    return {"success": True, "place_id": place_id, "keywords": keywords}
+        
+        elif response.status_code == 429:
+            return {"success": False, "error": "요청이 너무 많습니다. 잠시 후 다시 시도해주세요."}
+            
+    except requests.exceptions.Timeout:
+        return {"success": False, "error": "응답 시간 초과. 다시 시도해주세요."}
+    except:
+        pass
     
-    max_retries = 2
-    
-    for url in url_patterns:
-        for retry in range(max_retries):
-            try:
-                headers = get_place_headers()
-                
-                # 재시도 시 딜레이
-                if retry > 0:
-                    time.sleep(1)
-                
-                session = requests.Session()
-                response = session.get(url, headers=headers, timeout=10)
-                
-                if response.status_code == 200:
-                    html = response.content.decode('utf-8', errors='ignore')
-                    
-                    # __NEXT_DATA__ 에서 키워드 추출
-                    next_data_pattern = r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>'
-                    next_match = re.search(next_data_pattern, html, re.DOTALL)
-                    
-                    if next_match:
-                        try:
-                            json_str = next_match.group(1)
-                            data = json.loads(json_str)
-                            keywords = find_keywords_in_json(data)
-                            
-                            if keywords:
-                                return {"success": True, "place_id": place_id, "keywords": keywords}
-                        except:
-                            pass
-                    
-                    # window.__APOLLO_STATE__ 에서도 시도
-                    apollo_pattern = r'window\.__APOLLO_STATE__\s*=\s*(\{.*?\});'
-                    apollo_match = re.search(apollo_pattern, html, re.DOTALL)
-                    
-                    if apollo_match:
-                        try:
-                            apollo_str = apollo_match.group(1)
-                            apollo_data = json.loads(apollo_str)
-                            keywords = find_keywords_in_json(apollo_data)
-                            
-                            if keywords:
-                                return {"success": True, "place_id": place_id, "keywords": keywords}
-                        except:
-                            pass
-                
-                elif response.status_code == 429:
-                    # 429 에러 시 더 긴 딜레이 후 재시도
-                    if retry < max_retries - 1:
-                        time.sleep(2)
-                        continue
-                    else:
-                        # 마지막 URL 패턴에서도 실패하면 에러 반환
-                        if url == url_patterns[-1]:
-                            return {"success": False, "error": "네이버 서버가 일시적으로 요청을 제한했습니다. 잠시 후 다시 시도해주세요."}
-                
-            except requests.exceptions.Timeout:
-                if retry < max_retries - 1:
-                    continue
-            except Exception as e:
-                if retry < max_retries - 1:
-                    continue
-    
-    return {"success": False, "error": "대표키워드를 찾을 수 없습니다. 플레이스 ID를 확인해주세요."}
+    return {"success": False, "error": "대표키워드를 찾을 수 없습니다. ID를 확인해주세요."}
 
 
 def find_keywords_in_json(obj, depth=0):
     """JSON에서 키워드 배열 찾기"""
-    if depth > 20:
+    if depth > 15:
         return None
     
     if isinstance(obj, dict):
-        # keywordList 키 확인
         if "keywordList" in obj and isinstance(obj["keywordList"], list):
             if len(obj["keywordList"]) > 0 and isinstance(obj["keywordList"][0], str):
                 return obj["keywordList"]
         
-        # keywords 키 확인
         if "keywords" in obj and isinstance(obj["keywords"], list):
             if len(obj["keywords"]) > 0 and isinstance(obj["keywords"][0], str):
                 return obj["keywords"]
         
-        # 재귀 탐색
-        for key, value in obj.items():
+        for value in obj.values():
             result = find_keywords_in_json(value, depth + 1)
             if result:
                 return result
@@ -878,24 +780,22 @@ def format_place_keywords(place_id):
     result = get_place_keywords(place_id)
     
     if not result["success"]:
-        return f"""🏷️ 대표키워드 조회
+        return f"""🏷️ 대표키워드 조회 실패
 
 플레이스 ID: {place_id}
-
-━━━━━━━━━━━━━━━━
-❌ {result['error']}
+오류: {result['error']}
 
 ━━━━━━━━━━━━━━━━
 💡 플레이스 ID 찾는 방법:
-네이버 지도에서 가게 검색 →
-URL에서 숫자 부분이 ID입니다
+네이버 지도에서 가게 검색 후
+URL의 숫자 부분이 ID입니다
 
-예) place.naver.com/restaurant/12345678
-    → ID: 12345678"""
+예) place.naver.com/restaurant/1234567
+→ ID: 1234567"""
     
     keywords = result["keywords"]
     
-    response = f"""🏷️ 대표키워드 조회
+    response = f"""🏷️ 대표키워드 조회 완료
 
 플레이스 ID: {place_id}
 
@@ -913,8 +813,7 @@ URL에서 숫자 부분이 ID입니다
 복사용: {', '.join(keywords)}
 
 ━━━━━━━━━━━━━━━━
-※ 각 키워드 검색량도 확인해보세요
-예) {keywords[0]}"""
+※ 키워드 검색량 확인: {keywords[0]}"""
     
     return response
 
@@ -990,34 +889,6 @@ def test():
 
 
 #############################################
-# 라우트: 상세 CPC 분석 (JSON)
-#############################################
-@app.route('/analyze-cpc')
-def analyze_cpc():
-    keyword = request.args.get('keyword', '맛집')
-    
-    results = {
-        "keyword": keyword,
-        "min_bid": {},
-        "performance": {}
-    }
-    
-    results["min_bid"]["PC"] = get_exposure_minimum_bid(keyword, 'PC')
-    results["min_bid"]["MOBILE"] = get_exposure_minimum_bid(keyword, 'MOBILE')
-    
-    test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
-    
-    for device in ["PC", "MOBILE"]:
-        perf = get_performance_estimate(keyword, test_bids, device)
-        if perf["success"]:
-            results["performance"][device] = perf["data"]
-        else:
-            results["performance"][device] = {"error": perf.get("error", "Failed")}
-    
-    return jsonify(results)
-
-
-#############################################
 # 라우트: 카카오 스킬
 #############################################
 @app.route('/skill', methods=['POST'])
@@ -1064,12 +935,9 @@ def kakao_skill():
 예) 대표 37838432
 
 ━━━━━━━━━━━━━━━━
-💡 플레이스 ID 찾는 방법:
-네이버 지도에서 가게 검색 →
-URL에서 숫자 부분이 ID입니다
-
-예) place.naver.com/restaurant/12345678
-    → ID: 12345678"""
+💡 ID 찾는 방법:
+네이버 지도 > 가게 검색 >
+URL에서 숫자가 ID입니다"""
         
         # 연관 키워드
         elif lower_input.startswith("연관 "):
@@ -1106,7 +974,7 @@ URL에서 숫자 부분이 ID입니다
         return create_kakao_response(response_text)
         
     except Exception as e:
-        return create_kakao_response(f"서버 오류: {str(e)}")
+        return create_kakao_response(f"오류 발생: {str(e)}")
 
 
 #############################################
