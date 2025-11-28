@@ -687,8 +687,10 @@ def get_place_keywords(place_id):
         
         if response.status_code == 200:
             # 인코딩 명시적 설정
-            response.encoding = 'utf-8'
-            html = response.text
+            try:
+    html = response.content.decode('utf-8')
+except:
+    html = response.content.decode('utf-8', errors='ignore')
             debug_info.append(f"html 길이: {len(html)}")
             
             # keywordList 찾기
