@@ -253,7 +253,7 @@ def get_search_volume(keyword):
 
 경쟁도: {comp} {comp_mark}
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 ※ 다른 명령어: "도움말" 입력"""
 
 
@@ -496,7 +496,7 @@ def get_blog_titles(keyword):
 
 """
                 
-                result += """━━━━━━━━━━━━━━━
+                result += """━━━━━━━━━━━━━━
 ※ 상위 제목 패턴을 분석해보세요"""
                 
                 return result
@@ -510,17 +510,53 @@ def get_blog_titles(keyword):
 
 
 #############################################
-# 기능 5: 오늘의 운세 (Gemini)
+# 기능 5: 오늘의 운세 (Gemini) - 생년월일 지원
 #############################################
-def get_fortune():
+def get_fortune(birthdate=None):
     if not GEMINI_API_KEY:
-        return get_fortune_fallback()
+        return get_fortune_fallback(birthdate)
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     headers = {"Content-Type": "application/json"}
     
-    prompt = """오늘의 운세를 재미있고 긍정적으로 알려줘.
+    if birthdate:
+        # 생년월일 파싱
+        if len(birthdate) == 6:
+            year = birthdate[:2]
+            month = birthdate[2:4]
+            day = birthdate[4:6]
+            year_full = f"19{year}" if int(year) > 30 else f"20{year}"
+        elif len(birthdate) == 8:
+            year_full = birthdate[:4]
+            month = birthdate[4:6]
+            day = birthdate[6:8]
+        else:
+            return get_fortune()
+        
+        prompt = f"""생년월일 {year_full}년 {month}월 {day}일생의 오늘 운세를 알려줘.
+
+다음 형식으로 작성해줘:
+
+🔮 {year_full}년 {month}월 {day}일생 오늘의 운세
+
+✨ 총운
+(2줄 이내로 오늘의 전체적인 운세)
+
+💕 애정운: (1줄)
+💰 금전운: (1줄)
+💼 직장/학업운: (1줄)
+🏥 건강운: (1줄)
+
+🍀 행운의 숫자: (1-45 사이 숫자 3개)
+🎨 행운의 색: (색상 1개)
+
+💬 오늘의 조언
+"(이 생년월일에 맞는 오늘의 조언)"
+
+재미있고 긍정적으로 작성해줘."""
+    else:
+        prompt = """오늘의 운세를 재미있고 긍정적으로 알려줘.
 
 다음 형식으로 작성해줘:
 
@@ -557,12 +593,12 @@ def get_fortune():
             text = result["candidates"][0]["content"]["parts"][0]["text"]
             return text
         else:
-            return get_fortune_fallback()
+            return get_fortune_fallback(birthdate)
             
     except:
-        return get_fortune_fallback()
+        return get_fortune_fallback(birthdate)
 
-def get_fortune_fallback():
+def get_fortune_fallback(birthdate=None):
     fortunes = ["오늘은 새로운 기회가 찾아오는 날!", "좋은 소식이 들려올 예정이에요.", "작은 행운이 당신을 따라다녀요."]
     love = ["설레는 만남이 있을 수 있어요 💕", "소중한 사람과 대화를 나눠보세요"]
     money = ["작은 횡재수가 있어요 💰", "절약이 미덕인 날"]
@@ -573,7 +609,20 @@ def get_fortune_fallback():
     colors = ["빨간색", "파란색", "노란색", "초록색", "보라색"]
     quotes = ["오늘 하루도 화이팅! 💪", "웃으면 복이 와요 😊", "당신은 할 수 있어요!"]
     
-    return f"""🔮 오늘의 운세
+    if birthdate:
+        if len(birthdate) == 6:
+            year = birthdate[:2]
+            month = birthdate[2:4]
+            day = birthdate[4:6]
+            year_full = f"19{year}" if int(year) > 30 else f"20{year}"
+        elif len(birthdate) == 8:
+            year_full = birthdate[:4]
+            month = birthdate[4:6]
+            day = birthdate[6:8]
+        else:
+            year_full, month, day = "????", "??", "??"
+        
+        return f"""🔮 {year_full}년 {month}월 {day}일생 오늘의 운세
 
 ✨ 총운
 {random.choice(fortunes)}
@@ -585,7 +634,23 @@ def get_fortune_fallback():
 🍀 행운의 숫자: {lucky_numbers[0]}, {lucky_numbers[1]}, {lucky_numbers[2]}
 🎨 행운의 색: {random.choice(colors)}
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
+💬 "{random.choice(quotes)}"
+"""
+    else:
+        return f"""🔮 오늘의 운세
+
+✨ 총운
+{random.choice(fortunes)}
+
+💕 애정운: {random.choice(love)}
+💰 금전운: {random.choice(money)}
+💼 직장/학업운: {random.choice(work)}
+
+🍀 행운의 숫자: {lucky_numbers[0]}, {lucky_numbers[1]}, {lucky_numbers[2]}
+🎨 행운의 색: {random.choice(colors)}
+
+━━━━━━━━━━━━━━
 💬 "{random.choice(quotes)}"
 """
 
@@ -618,7 +683,7 @@ def get_lotto():
 4️⃣ ○○, ○○, ○○, ○○, ○○, ○○
 5️⃣ ○○, ○○, ○○, ○○, ○○, ○○
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 🍀 행운을 빕니다!
 
 ⚠️ 로또는 재미로만 즐겨주세요!"""
@@ -657,7 +722,7 @@ def get_lotto_fallback():
         result += f"{emoji} {numbers_str}\n"
     
     result += """
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 🍀 행운을 빕니다!
 
 ⚠️ 로또는 재미로만 즐기세요!"""
@@ -666,7 +731,7 @@ def get_lotto_fallback():
 
 
 #############################################
-# 기능 7: 대표키워드 조회 (인코딩 수정)
+# 기능 7: 대표키워드 조회
 #############################################
 def get_place_keywords(place_id):
     """대표키워드 조회"""
@@ -686,7 +751,6 @@ def get_place_keywords(place_id):
         debug_info.append(f"status: {response.status_code}")
         
         if response.status_code == 200:
-            # 핵심 수정: content를 직접 UTF-8로 디코딩
             try:
                 html = response.content.decode('utf-8')
             except:
@@ -694,7 +758,6 @@ def get_place_keywords(place_id):
             
             debug_info.append(f"html 길이: {len(html)}")
             
-            # keywordList 찾기
             match = re.search(r'"keywordList"\s*:\s*\[((?:"[^"]*",?\s*)*)\]', html)
             if match:
                 debug_info.append("keywordList 발견")
@@ -707,7 +770,6 @@ def get_place_keywords(place_id):
                 except Exception as e:
                     debug_info.append(f"파싱 오류: {str(e)}")
             
-            # keywords 찾기
             match2 = re.search(r'"keywords"\s*:\s*\[((?:"[^"]*",?\s*)*)\]', html)
             if match2:
                 debug_info.append("keywords 발견")
@@ -724,7 +786,6 @@ def get_place_keywords(place_id):
     except Exception as e:
         debug_info.append(f"오류: {str(e)}")
     
-    # 다른 카테고리 시도
     categories = ['place', 'cafe', 'hospital', 'beauty']
     for category in categories:
         try:
@@ -732,7 +793,6 @@ def get_place_keywords(place_id):
             response = requests.get(alt_url, headers=headers, timeout=5)
             
             if response.status_code == 200:
-                # 여기도 동일하게 수정
                 try:
                     html = response.content.decode('utf-8')
                 except:
@@ -753,6 +813,7 @@ def get_place_keywords(place_id):
     
     return {"success": False, "error": "대표키워드를 찾을 수 없습니다.", "debug": debug_info}
 
+
 def format_place_keywords(place_id):
     result = get_place_keywords(place_id)
     
@@ -762,7 +823,7 @@ def format_place_keywords(place_id):
 플레이스 ID: {place_id}
 오류: {result['error']}
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 💡 플레이스 ID 찾는 방법:
 네이버 지도에서 가게 검색 후
 URL의 숫자 부분이 ID입니다
@@ -776,9 +837,9 @@ URL의 숫자 부분이 ID입니다
 
 플레이스 ID: {place_id}
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 대표키워드 ({len(keywords)}개)
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 
 """
     
@@ -786,10 +847,10 @@ URL의 숫자 부분이 ID입니다
         response += f"{i}. {kw}\n"
     
     response += f"""
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 복사용: {', '.join(keywords)}
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 ※ 키워드 검색량 확인: {keywords[0]}"""
     
     return response
@@ -801,9 +862,9 @@ URL의 숫자 부분이 ID입니다
 def get_help():
     return """📖 사용 설명서
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 📊 키워드 분석
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 
 🔍 검색량 조회
 → 키워드만 입력
@@ -825,14 +886,15 @@ def get_help():
 → "대표" + 플레이스ID
 예) 대표 37838432
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 🎯 재미 기능
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 
 🔮 운세 → "운세" 입력
+🔮 생년월일 운세 → "운세 870114"
 🎰 로또 → "로또" 입력
 
-━━━━━━━━━━━━━━━"""
+━━━━━━━━━━━━━━"""
 
 
 #############################################
@@ -851,7 +913,6 @@ def test_place():
     place_id = request.args.get('id', '37838432')
     result = get_place_keywords(place_id)
     
-    # UTF-8 명시
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -878,6 +939,7 @@ def test_place():
     
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
+
 #############################################
 # 라우트: 카카오 스킬
 #############################################
@@ -902,7 +964,25 @@ def kakao_skill():
         if lower_input in ["도움말", "도움", "사용법", "help", "?", "메뉴"]:
             response_text = get_help()
         
-        # 운세
+        # 운세 (생년월일 포함)
+        elif lower_input.startswith("운세 "):
+            # "운세 870114" 또는 "운세 19870114" 형태
+            birthdate = ''.join(filter(str.isdigit, user_utterance))
+            if birthdate and len(birthdate) in [6, 8]:
+                response_text = get_fortune(birthdate)
+            else:
+                response_text = """🔮 생년월일 운세
+
+생년월일을 6자리 또는 8자리로 입력해주세요
+
+━━━━━━━━━━━━━━
+예) 운세 870114
+예) 운세 19870114
+
+━━━━━━━━━━━━━━
+※ 일반 운세: "운세" 만 입력"""
+        
+        # 운세 (일반)
         elif lower_input in ["운세", "오늘의운세", "오늘운세", "오늘의 운세", "fortune"]:
             response_text = get_fortune()
         
@@ -920,11 +1000,11 @@ def kakao_skill():
 
 플레이스 ID를 입력해주세요
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 사용법: 대표 [플레이스ID]
 예) 대표 37838432
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 💡 ID 찾는 방법:
 네이버 지도 > 가게 검색 >
 URL에서 숫자가 ID입니다"""
