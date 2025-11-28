@@ -55,7 +55,6 @@ def format_won(value):
         return f"{format_number(int(value))}원"
 
 def clean_keyword(keyword):
-    """키워드 내 띄어쓰기 제거"""
     return keyword.replace(" ", "")
 
 
@@ -667,12 +666,15 @@ def get_lotto_fallback():
 
 
 #############################################
-# 기능 7: 대표키워드 조회 (빠른 버전)
+# 기능 7: 대표키워드 조회 (디버깅 포함)
 #############################################
 def get_place_keywords(place_id):
-    """대표키워드 조회 - 빠른 단일 요청"""
+    """대표키워드 조회"""
+    debug_info = []
     
-    # 1. GraphQL API 먼저 시도 (가장 빠름)
+    # 1. GraphQL API 시도
+    debug_info.append("1. GraphQL API 시도")
+    
     url = "https://pcmap-api.place.naver.com/graphql"
     
     headers = {
@@ -682,73 +684,90 @@ def get_place_keywords(place_id):
         "Origin": "https://pcmap.place.naver.com"
     }
     
-    query = """
-    query getRestaurant($input: RestaurantInput) {
-        restaurant(input: $input) {
-            keywords
-        }
-    }
-    """
+    # 여러 타입 시도 (restaurant, place, hospital 등)
+    place_types = ["restaurant", "place", "hospital", "beauty"]
     
-    payload = {
-        "operationName": "getRestaurant",
-        "query": query,
-        "variables": {"input": {"id": place_id}}
-    }
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=3)
+    for ptype in place_types:
+        query = f"""
+        query get{ptype.capitalize()}($input: {ptype.capitalize()}Input) {{
+            {ptype}(input: $input) {{
+                keywords
+            }}
+        }}
+        """
         
-        if response.status_code == 200:
-            data = response.json()
+        payload = {
+            "operationName": f"get{ptype.capitalize()}",
+            "query": query,
+            "variables": {"input": {"id": place_id}}
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=3)
+            debug_info.append(f"  - {ptype}: status={response.status_code}")
             
-            if "data" in data and data["data"]:
-                restaurant = data["data"].get("restaurant")
-                if restaurant and "keywords" in restaurant:
-                    keywords = restaurant["keywords"]
-                    if keywords and len(keywords) > 0:
-                        return {"success": True, "place_id": place_id, "keywords": keywords}
-    except:
-        pass
+            if response.status_code == 200:
+                data = response.json()
+                
+                if "data" in data and data["data"]:
+                    place_data = data["data"].get(ptype)
+                    if place_data and "keywords" in place_data:
+                        keywords = place_data["keywords"]
+                        if keywords and len(keywords) > 0:
+                            debug_info.append(f"  - 성공! keywords={keywords}")
+                            return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
+        except Exception as e:
+            debug_info.append(f"  - {ptype} 오류: {str(e)}")
     
     # 2. HTML 스크래핑 시도
-    try:
-        html_url = f"https://m.place.naver.com/restaurant/{place_id}/home"
-        
-        html_headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "ko-KR,ko;q=0.9"
-        }
-        
-        response = requests.get(html_url, headers=html_headers, timeout=3)
-        
-        if response.status_code == 200:
-            html = response.text
-            
-            # __NEXT_DATA__ 파싱
-            match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
-            
-            if match:
-                json_data = json.loads(match.group(1))
-                keywords = find_keywords_in_json(json_data)
-                
-                if keywords:
-                    return {"success": True, "place_id": place_id, "keywords": keywords}
-        
-        elif response.status_code == 429:
-            return {"success": False, "error": "요청이 너무 많습니다. 잠시 후 다시 시도해주세요."}
-            
-    except requests.exceptions.Timeout:
-        return {"success": False, "error": "응답 시간 초과. 다시 시도해주세요."}
-    except:
-        pass
+    debug_info.append("2. HTML 스크래핑 시도")
     
-    return {"success": False, "error": "대표키워드를 찾을 수 없습니다. ID를 확인해주세요."}
+    urls_to_try = [
+        f"https://m.place.naver.com/restaurant/{place_id}/home",
+        f"https://m.place.naver.com/place/{place_id}/home",
+        f"https://place.naver.com/restaurant/{place_id}/home"
+    ]
+    
+    for html_url in urls_to_try:
+        try:
+            html_headers = {
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "ko-KR,ko;q=0.9"
+            }
+            
+            response = requests.get(html_url, headers=html_headers, timeout=3)
+            debug_info.append(f"  - {html_url}: status={response.status_code}")
+            
+            if response.status_code == 200:
+                html = response.text
+                
+                # __NEXT_DATA__ 찾기
+                match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+                
+                if match:
+                    debug_info.append("  - __NEXT_DATA__ 발견")
+                    json_data = json.loads(match.group(1))
+                    keywords = find_keywords_in_json(json_data)
+                    
+                    if keywords:
+                        debug_info.append(f"  - 성공! keywords={keywords}")
+                        return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
+                    else:
+                        debug_info.append("  - keywords 못 찾음")
+                else:
+                    debug_info.append("  - __NEXT_DATA__ 없음")
+                    
+            elif response.status_code == 429:
+                debug_info.append("  - 429 Too Many Requests")
+                
+        except Exception as e:
+            debug_info.append(f"  - 오류: {str(e)}")
+    
+    return {"success": False, "error": "대표키워드를 찾을 수 없습니다.", "debug": debug_info}
 
 
 def find_keywords_in_json(obj, depth=0):
-    """JSON에서 키워드 배열 찾기"""
     if depth > 15:
         return None
     
@@ -776,7 +795,6 @@ def find_keywords_in_json(obj, depth=0):
 
 
 def format_place_keywords(place_id):
-    """대표키워드 결과 포맷팅"""
     result = get_place_keywords(place_id)
     
     if not result["success"]:
@@ -867,25 +885,30 @@ def home():
 
 
 #############################################
-# 라우트: 테스트
+# 라우트: 대표키워드 디버깅 테스트
 #############################################
-@app.route('/test')
-def test():
-    keyword = request.args.get('keyword', '맛집')
-    result = get_keyword_data(keyword)
+@app.route('/test-place')
+def test_place():
+    place_id = request.args.get('id', '37838432')
+    result = get_place_keywords(place_id)
     
-    if result["success"]:
-        kw = result["data"][0]
-        pc = parse_count(kw.get("monthlyPcQcCnt"))
-        mobile = parse_count(kw.get("monthlyMobileQcCnt"))
-        return f"""
-        <h2>"{kw.get('relKeyword', keyword)}" 검색량</h2>
-        <p>월간 총: {format_number(pc + mobile)}회</p>
-        <p>모바일: {format_number(mobile)}회</p>
-        <p>PC: {format_number(pc)}회</p>
-        """
+    html = f"<h2>플레이스 ID: {place_id}</h2>"
+    html += f"<h3>결과: {'성공' if result['success'] else '실패'}</h3>"
+    
+    if result['success']:
+        html += f"<h4>키워드:</h4><ul>"
+        for kw in result['keywords']:
+            html += f"<li>{kw}</li>"
+        html += "</ul>"
     else:
-        return f"<h2>조회 실패</h2><p>{result['error']}</p>"
+        html += f"<p>오류: {result.get('error', 'Unknown')}</p>"
+    
+    html += "<h4>디버그 로그:</h4><pre>"
+    for log in result.get('debug', []):
+        html += f"{log}\n"
+    html += "</pre>"
+    
+    return html
 
 
 #############################################
