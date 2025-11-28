@@ -143,7 +143,6 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
         url = f'https://api.searchad.naver.com{uri}'
         headers = get_naver_api_headers('POST', uri)
         
-        # 올바른 형식: key + bids 배열
         payload = {
             "device": device,
             "keywordplus": False,
@@ -169,10 +168,8 @@ def get_optimal_bid_analysis(estimates):
     if not valid_estimates:
         return None
     
-    # 1. 최소 노출
     min_exposure = valid_estimates[0]
     
-    # 2. 구간별 효율 계산
     efficiency_data = []
     for i in range(1, len(valid_estimates)):
         prev = valid_estimates[i-1]
@@ -192,15 +189,12 @@ def get_optimal_bid_analysis(estimates):
                 'cost_per_click': cost_per_additional_click
             })
     
-    # 3. 효율이 급락하는 지점 찾기
     best_efficiency = None
     
     for i, eff in enumerate(efficiency_data):
         if i + 1 < len(efficiency_data):
             next_eff = efficiency_data[i + 1]
             
-            # 다음 구간의 효율이 현재보다 2배 이상 나쁘거나
-            # 다음 구간의 클릭 증가가 현재의 10% 미만이면 현재 구간이 최적
             efficiency_drop = next_eff['cost_per_click'] / eff['cost_per_click'] if eff['cost_per_click'] > 0 else 999
             click_ratio = next_eff['click_increase'] / eff['click_increase'] if eff['click_increase'] > 0 else 0
             
@@ -212,14 +206,12 @@ def get_optimal_bid_analysis(estimates):
                 }
                 break
         else:
-            # 마지막 구간이면 이게 최적
             best_efficiency = {
                 'data': eff['data'],
                 'cost_per_click': eff['cost_per_click'],
                 'reason': 'last_efficient'
             }
     
-    # 효율 분석 실패 시 기존 로직
     if not best_efficiency:
         if len(valid_estimates) >= 3:
             mid_idx = len(valid_estimates) // 2
@@ -233,7 +225,6 @@ def get_optimal_bid_analysis(estimates):
                 'cost_per_click': None
             }
     
-    # 4. 차선책 찾기 - 추천 클릭의 15% 이상 (최소 10회)
     alternative = None
     if best_efficiency and len(valid_estimates) >= 2:
         best_clicks = best_efficiency['data'].get('clicks', 0)
@@ -244,7 +235,6 @@ def get_optimal_bid_analysis(estimates):
             if est.get('bid', 0) < best_bid and est.get('clicks', 0) >= min_alternative_clicks:
                 alternative = est
     
-    # 5. 효과 동일 구간 찾기 (입찰가 올려도 클릭 안 늘어나는 지점)
     max_effective_bid = None
     if valid_estimates:
         max_clicks = valid_estimates[-1].get('clicks', 0)
@@ -321,7 +311,7 @@ def get_related_keywords(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 조회 (개선 버전)
+# 기능 3: 광고 단가 조회
 #############################################
 def get_ad_cost(keyword):
     result = get_keyword_data(keyword)
@@ -332,7 +322,6 @@ def get_ad_cost(keyword):
     kw = result["data"][0]
     keyword_name = kw.get('relKeyword', keyword)
     
-    # 키워드 도구 데이터
     pc_qc = parse_count(kw.get("monthlyPcQcCnt"))
     mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
     total_qc = pc_qc + mobile_qc
@@ -340,16 +329,14 @@ def get_ad_cost(keyword):
     comp = kw.get("compIdx", "정보없음")
     comp_mark = {"높음": "🔴", "중간": "🟡"}.get(comp, "🟢")
     
-    # 모바일 비율 계산
     mobile_ratio = (mobile_qc * 100 // total_qc) if total_qc > 0 else 0
     pc_ratio = 100 - mobile_ratio
     
-    # 헤더
     response = f"""💰 "{keyword_name}" 광고 분석
 
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━
 📊 키워드 정보
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━
 
 경쟁도: {comp} {comp_mark}
 월간 검색량: {format_number(total_qc)}회
@@ -358,7 +345,6 @@ def get_ad_cost(keyword):
 
 """
     
-    # Performance API 분석
     test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
     mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
     pc_perf = get_performance_estimate(keyword_name, test_bids, 'PC')
@@ -373,15 +359,14 @@ def get_ad_cost(keyword):
         if analysis:
             valid_estimates = analysis['all_estimates']
             
-            response += f"""━━━━━━━━━━━━━━
+            response += f"""━━━━━━━━━━━━━━━━━━━━━━━━
 📱 모바일 광고 단가
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━
 
 입찰가별 예상 성과
 
 """
             
-            # 입찰가별 성과 (간결하게)
             prev_clicks = 0
             for est in valid_estimates[:6]:
                 bid = est.get("bid", 0)
@@ -390,19 +375,16 @@ def get_ad_cost(keyword):
                 
                 response += f"{format_number(bid)}원 → 월 {clicks}회 클릭 | {format_won(cost)}\n"
                 
-                # 클릭 증가 없으면 표시
                 if clicks == prev_clicks and prev_clicks > 0:
                     break
                 prev_clicks = clicks
             
-            # 효과 동일 구간 안내
             max_effective_bid = analysis.get('max_effective_bid')
             if max_effective_bid:
                 response += f"  ↑ {format_number(max_effective_bid)}원 이상은 효과 동일\n"
             
             response += "\n"
             
-            # 추천 입찰가
             best_eff = analysis.get('best_efficiency')
             alternative = analysis.get('alternative')
             
@@ -414,9 +396,9 @@ def get_ad_cost(keyword):
                 eff_cpc = int(eff_cost / eff_clicks) if eff_clicks > 0 else eff_bid
                 daily_budget = eff_cost / 30
                 
-                response += f"""━━━━━━━━━━━━━━
+                response += f"""━━━━━━━━━━━━━━━━━━━━━━━━
 🎯 추천 입찰가
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━
 
 ✅ 추천: {format_number(eff_bid)}원
 ├ 예상 클릭: 월 {eff_clicks}회
@@ -426,13 +408,11 @@ def get_ad_cost(keyword):
 
 """
                 
-                # 효과 동일 안내
                 if max_effective_bid and max_effective_bid <= eff_bid:
                     response += f"※ {format_number(eff_bid)}원 이상 올려도 클릭 증가 없음\n"
                 elif max_effective_bid:
                     response += f"※ {format_number(max_effective_bid)}원 이상 올려도 클릭 증가 없음\n"
                 
-                # 차선책 안내
                 if alternative:
                     alt_bid = alternative.get('bid', 0)
                     alt_clicks = alternative.get('clicks', 0)
@@ -441,7 +421,6 @@ def get_ad_cost(keyword):
                 
                 response += "\n"
     
-    # PC 분석
     if pc_success:
         pc_estimates = pc_perf["data"].get("estimate", [])
         pc_analysis = get_optimal_bid_analysis(pc_estimates)
@@ -455,9 +434,9 @@ def get_ad_cost(keyword):
                 pc_cost = pc_eff.get('cost', 0)
                 pc_cpc = int(pc_cost / pc_clicks) if pc_clicks > 0 else pc_bid
                 
-                response += f"""━━━━━━━━━━━━━
+                response += f"""━━━━━━━━━━━━━━━━━━━━━━━━
 💻 PC 광고
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━
 
 추천: {format_number(pc_bid)}원
 ├ 예상 클릭: 월 {pc_clicks}회
@@ -465,15 +444,14 @@ def get_ad_cost(keyword):
 
 """
             else:
-                response += f"""━━━━━━━━━━━━━━
+                response += f"""━━━━━━━━━━━━━━━━━━━━━━━━
 💻 PC 광고
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━
 
 ※ PC 검색량 적어 모바일 집중 권장
 
 """
     
-    # 운영 가이드
     if mobile_success and analysis and analysis.get('best_efficiency'):
         eff_data = analysis['best_efficiency']['data']
         eff_cost = eff_data.get('cost', 0)
@@ -482,9 +460,9 @@ def get_ad_cost(keyword):
         
         daily_budget = max(eff_cost / 30, 10000)
         
-        response += f"""━━━━━━━━━━━━━━
+        response += f"""━━━━━━━━━━━━━━━━━━━━━━━━
 📋 운영 가이드
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━
 
 시작 설정
 • 입찰가: {format_number(eff_bid)}원
@@ -496,7 +474,7 @@ def get_ad_cost(keyword):
 • 전환 발생 시 예산 증액 검토
 • 품질점수 관리로 CPC 절감 가능
 
-━━━━━━━━━━━━━━"""
+━━━━━━━━━━━━━━━━━━━━━━━━"""
     
     return response
 
@@ -544,7 +522,7 @@ def get_blog_titles(keyword):
 
 """
                 
-                result += """━━━━━━━━━━━━━━
+                result += """━━━━━━━━━━━━━━━━
 ※ 상위 제목 패턴을 분석해보세요"""
                 
                 return result
@@ -633,7 +611,7 @@ def get_fortune_fallback():
 🍀 행운의 숫자: {lucky_numbers[0]}, {lucky_numbers[1]}, {lucky_numbers[2]}
 🎨 행운의 색: {random.choice(colors)}
 
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 💬 "{random.choice(quotes)}"
 """
 
@@ -666,7 +644,7 @@ def get_lotto():
 4️⃣ ○○, ○○, ○○, ○○, ○○, ○○
 5️⃣ ○○, ○○, ○○, ○○, ○○, ○○
 
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 🍀 행운을 빕니다!
 
 ⚠️ 로또는 재미로만 즐겨주세요!"""
@@ -705,7 +683,7 @@ def get_lotto_fallback():
         result += f"{emoji} {numbers_str}\n"
     
     result += """
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 🍀 행운을 빕니다!
 
 ⚠️ 로또는 재미로만 즐기세요!"""
@@ -714,16 +692,43 @@ def get_lotto_fallback():
 
 
 #############################################
-# 기능 7: 대표키워드 조회
+# 기능 7: 대표키워드 조회 (429 에러 대응 개선)
 #############################################
+def get_place_headers():
+    """더 자연스러운 브라우저 헤더 생성"""
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+    ]
+    
+    return {
+        "User-Agent": random.choice(user_agents),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0"
+    }
+
+
 def get_place_keywords(place_id):
+    """대표키워드 조회 - GraphQL API 시도"""
     url = "https://pcmap-api.place.naver.com/graphql"
     
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": f"https://pcmap.place.naver.com/restaurant/{place_id}/home",
-        "Origin": "https://pcmap.place.naver.com"
+        "Origin": "https://pcmap.place.naver.com",
+        "Accept": "*/*",
+        "Accept-Language": "ko-KR,ko;q=0.9"
     }
     
     query = """
@@ -753,6 +758,7 @@ def get_place_keywords(place_id):
                     if keywords and len(keywords) > 0:
                         return {"success": True, "place_id": place_id, "keywords": keywords}
         
+        # GraphQL 실패 시 HTML 방식 시도
         return get_place_keywords_html(place_id)
             
     except:
@@ -760,54 +766,99 @@ def get_place_keywords(place_id):
 
 
 def get_place_keywords_html(place_id):
-    url = f"https://m.place.naver.com/restaurant/{place_id}/home"
+    """대표키워드 조회 - HTML 스크래핑 (재시도 로직 포함)"""
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-    }
+    # 여러 URL 패턴 시도
+    url_patterns = [
+        f"https://m.place.naver.com/restaurant/{place_id}/home",
+        f"https://m.place.naver.com/place/{place_id}/home",
+        f"https://place.naver.com/restaurant/{place_id}/home"
+    ]
     
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            return {"success": False, "error": f"페이지 조회 실패 (코드: {response.status_code})"}
-        
-        html = response.content.decode('utf-8', errors='ignore')
-        
-        next_data_pattern = r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>'
-        next_match = re.search(next_data_pattern, html, re.DOTALL)
-        
-        if next_match:
+    max_retries = 2
+    
+    for url in url_patterns:
+        for retry in range(max_retries):
             try:
-                json_str = next_match.group(1)
-                data = json.loads(json_str)
-                keywords = find_keywords_in_json(data)
+                headers = get_place_headers()
                 
-                if keywords:
-                    return {"success": True, "place_id": place_id, "keywords": keywords}
-            except:
-                pass
-        
-        return {"success": False, "error": "대표키워드를 찾을 수 없습니다."}
-            
-    except Exception as e:
-        return {"success": False, "error": f"오류 발생: {str(e)}"}
+                # 재시도 시 딜레이
+                if retry > 0:
+                    time.sleep(1)
+                
+                session = requests.Session()
+                response = session.get(url, headers=headers, timeout=10)
+                
+                if response.status_code == 200:
+                    html = response.content.decode('utf-8', errors='ignore')
+                    
+                    # __NEXT_DATA__ 에서 키워드 추출
+                    next_data_pattern = r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>'
+                    next_match = re.search(next_data_pattern, html, re.DOTALL)
+                    
+                    if next_match:
+                        try:
+                            json_str = next_match.group(1)
+                            data = json.loads(json_str)
+                            keywords = find_keywords_in_json(data)
+                            
+                            if keywords:
+                                return {"success": True, "place_id": place_id, "keywords": keywords}
+                        except:
+                            pass
+                    
+                    # window.__APOLLO_STATE__ 에서도 시도
+                    apollo_pattern = r'window\.__APOLLO_STATE__\s*=\s*(\{.*?\});'
+                    apollo_match = re.search(apollo_pattern, html, re.DOTALL)
+                    
+                    if apollo_match:
+                        try:
+                            apollo_str = apollo_match.group(1)
+                            apollo_data = json.loads(apollo_str)
+                            keywords = find_keywords_in_json(apollo_data)
+                            
+                            if keywords:
+                                return {"success": True, "place_id": place_id, "keywords": keywords}
+                        except:
+                            pass
+                
+                elif response.status_code == 429:
+                    # 429 에러 시 더 긴 딜레이 후 재시도
+                    if retry < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    else:
+                        # 마지막 URL 패턴에서도 실패하면 에러 반환
+                        if url == url_patterns[-1]:
+                            return {"success": False, "error": "네이버 서버가 일시적으로 요청을 제한했습니다. 잠시 후 다시 시도해주세요."}
+                
+            except requests.exceptions.Timeout:
+                if retry < max_retries - 1:
+                    continue
+            except Exception as e:
+                if retry < max_retries - 1:
+                    continue
+    
+    return {"success": False, "error": "대표키워드를 찾을 수 없습니다. 플레이스 ID를 확인해주세요."}
 
 
 def find_keywords_in_json(obj, depth=0):
+    """JSON에서 키워드 배열 찾기"""
     if depth > 20:
         return None
     
     if isinstance(obj, dict):
+        # keywordList 키 확인
         if "keywordList" in obj and isinstance(obj["keywordList"], list):
             if len(obj["keywordList"]) > 0 and isinstance(obj["keywordList"][0], str):
                 return obj["keywordList"]
         
+        # keywords 키 확인
         if "keywords" in obj and isinstance(obj["keywords"], list):
             if len(obj["keywords"]) > 0 and isinstance(obj["keywords"][0], str):
                 return obj["keywords"]
         
+        # 재귀 탐색
         for key, value in obj.items():
             result = find_keywords_in_json(value, depth + 1)
             if result:
@@ -823,10 +874,24 @@ def find_keywords_in_json(obj, depth=0):
 
 
 def format_place_keywords(place_id):
+    """대표키워드 결과 포맷팅"""
     result = get_place_keywords(place_id)
     
     if not result["success"]:
-        return f"조회 실패: {result['error']}"
+        return f"""🏷️ 대표키워드 조회
+
+플레이스 ID: {place_id}
+
+━━━━━━━━━━━━━━━━
+❌ {result['error']}
+
+━━━━━━━━━━━━━━━━
+💡 플레이스 ID 찾는 방법:
+네이버 지도에서 가게 검색 →
+URL에서 숫자 부분이 ID입니다
+
+예) place.naver.com/restaurant/12345678
+    → ID: 12345678"""
     
     keywords = result["keywords"]
     
@@ -834,9 +899,9 @@ def format_place_keywords(place_id):
 
 플레이스 ID: {place_id}
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 대표키워드 ({len(keywords)}개)
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 
 """
     
@@ -844,10 +909,10 @@ def format_place_keywords(place_id):
         response += f"{i}. {kw}\n"
     
     response += f"""
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 복사용: {', '.join(keywords)}
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 ※ 각 키워드 검색량도 확인해보세요
 예) {keywords[0]}"""
     
@@ -860,9 +925,9 @@ def format_place_keywords(place_id):
 def get_help():
     return """📖 사용 설명서
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 📊 키워드 분석
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 
 🔍 검색량 조회
 → 키워드만 입력
@@ -884,14 +949,14 @@ def get_help():
 → "대표" + 플레이스ID
 예) 대표 37838432
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 🎯 재미 기능
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 
 🔮 운세 → "운세" 입력
 🎰 로또 → "로또" 입력
 
-━━━━━━━━━━━━━━━"""
+━━━━━━━━━━━━━━━━"""
 
 
 #############################################
@@ -937,11 +1002,9 @@ def analyze_cpc():
         "performance": {}
     }
     
-    # 노출 최소 입찰가
     results["min_bid"]["PC"] = get_exposure_minimum_bid(keyword, 'PC')
     results["min_bid"]["MOBILE"] = get_exposure_minimum_bid(keyword, 'MOBILE')
     
-    # 입찰가별 예상 성과
     test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
     
     for device in ["PC", "MOBILE"]:
@@ -992,12 +1055,26 @@ def kakao_skill():
             if place_id:
                 response_text = format_place_keywords(place_id)
             else:
-                response_text = "플레이스 ID를 입력해주세요\n\n예) 대표 37838432"
+                response_text = """🏷️ 대표키워드 조회
+
+플레이스 ID를 입력해주세요
+
+━━━━━━━━━━━━━━━━
+사용법: 대표 [플레이스ID]
+예) 대표 37838432
+
+━━━━━━━━━━━━━━━━
+💡 플레이스 ID 찾는 방법:
+네이버 지도에서 가게 검색 →
+URL에서 숫자 부분이 ID입니다
+
+예) place.naver.com/restaurant/12345678
+    → ID: 12345678"""
         
         # 연관 키워드
         elif lower_input.startswith("연관 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
-            keyword = clean_keyword(keyword)  # 키워드 내 띄어쓰기 제거
+            keyword = clean_keyword(keyword)
             if keyword:
                 response_text = get_related_keywords(keyword)
             else:
@@ -1006,7 +1083,7 @@ def kakao_skill():
         # 광고 단가
         elif lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
-            keyword = clean_keyword(keyword)  # 키워드 내 띄어쓰기 제거
+            keyword = clean_keyword(keyword)
             if keyword:
                 response_text = get_ad_cost(keyword)
             else:
@@ -1015,7 +1092,7 @@ def kakao_skill():
         # 블로그 상위글
         elif lower_input.startswith("블로그 "):
             keyword = user_utterance.split(" ", 1)[1] if " " in user_utterance else ""
-            keyword = clean_keyword(keyword)  # 키워드 내 띄어쓰기 제거
+            keyword = clean_keyword(keyword)
             if keyword:
                 response_text = get_blog_titles(keyword)
             else:
@@ -1023,7 +1100,7 @@ def kakao_skill():
         
         # 기본: 검색량 조회
         else:
-            keyword = clean_keyword(user_utterance)  # 키워드 내 띄어쓰기 제거
+            keyword = clean_keyword(user_utterance)
             response_text = get_search_volume(keyword)
         
         return create_kakao_response(response_text)
