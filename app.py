@@ -253,7 +253,7 @@ def get_search_volume(keyword):
 
 경쟁도: {comp} {comp_mark}
 
-━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━
 ※ 다른 명령어: "도움말" 입력"""
 
 
