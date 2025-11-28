@@ -666,147 +666,60 @@ def get_lotto_fallback():
 
 
 #############################################
-# 기능 7: 대표키워드 조회 (개선된 버전)
+# 기능 7: 대표키워드 조회 (수정됨)
 #############################################
 def get_place_keywords(place_id):
-    """대표키워드 조회 - 여러 패턴으로 시도"""
+    """대표키워드 조회"""
     debug_info = []
-    
-    # HTML 스크래핑
-    debug_info.append("HTML 스크래핑 시도")
     
     html_url = f"https://m.place.naver.com/restaurant/{place_id}/home"
     
-    html_headers = {
+    # Accept-Encoding 제거하여 압축 없이 받기
+    headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive"
+        "Accept-Language": "ko-KR,ko;q=0.9"
     }
     
     try:
-        response = requests.get(html_url, headers=html_headers, timeout=5)
-        debug_info.append(f"  status: {response.status_code}")
+        response = requests.get(html_url, headers=headers, timeout=5)
+        debug_info.append(f"status: {response.status_code}")
         
         if response.status_code == 200:
             html = response.text
-            debug_info.append(f"  html 길이: {len(html)}")
+            debug_info.append(f"html 길이: {len(html)}")
             
-            # 방법 1: __NEXT_DATA__ 찾기
-            next_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
-            if next_match:
-                debug_info.append("  __NEXT_DATA__ 발견")
+            # keywordList 찾기
+            match = re.search(r'"keywordList"\s*:\s*\[([^\]]+)\]', html)
+            if match:
+                debug_info.append("keywordList 발견")
                 try:
-                    json_data = json.loads(next_match.group(1))
-                    keywords = find_keywords_in_json(json_data)
-                    if keywords:
-                        return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
-                except:
-                    debug_info.append("  __NEXT_DATA__ 파싱 실패")
-            else:
-                debug_info.append("  __NEXT_DATA__ 없음")
-            
-            # 방법 2: window.__APOLLO_STATE__ 찾기
-            apollo_match = re.search(r'window\.__APOLLO_STATE__\s*=\s*(\{.+?\});', html, re.DOTALL)
-            if apollo_match:
-                debug_info.append("  __APOLLO_STATE__ 발견")
-                try:
-                    apollo_data = json.loads(apollo_match.group(1))
-                    keywords = find_keywords_in_json(apollo_data)
-                    if keywords:
-                        return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
-                except:
-                    debug_info.append("  __APOLLO_STATE__ 파싱 실패")
-            else:
-                debug_info.append("  __APOLLO_STATE__ 없음")
-            
-            # 방법 3: "keywords":["..."] 패턴 직접 찾기
-            kw_match = re.search(r'"keywords"\s*:\s*\[(.*?)\]', html)
-            if kw_match:
-                debug_info.append("  keywords 패턴 발견")
-                try:
-                    kw_str = "[" + kw_match.group(1) + "]"
-                    keywords = json.loads(kw_str)
+                    keywords_str = "[" + match.group(1) + "]"
+                    keywords = json.loads(keywords_str)
                     if keywords and len(keywords) > 0:
                         return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
-                except:
-                    debug_info.append("  keywords 파싱 실패")
-            else:
-                debug_info.append("  keywords 패턴 없음")
+                except Exception as e:
+                    debug_info.append(f"파싱 오류: {str(e)}")
             
-            # 방법 4: "keywordList":["..."] 패턴 찾기
-            kwlist_match = re.search(r'"keywordList"\s*:\s*\[(.*?)\]', html)
-            if kwlist_match:
-                debug_info.append("  keywordList 패턴 발견")
+            # keywords 찾기
+            match2 = re.search(r'"keywords"\s*:\s*\[([^\]]+)\]', html)
+            if match2:
+                debug_info.append("keywords 발견")
                 try:
-                    kw_str = "[" + kwlist_match.group(1) + "]"
-                    keywords = json.loads(kw_str)
+                    keywords_str = "[" + match2.group(1) + "]"
+                    keywords = json.loads(keywords_str)
                     if keywords and len(keywords) > 0:
                         return {"success": True, "place_id": place_id, "keywords": keywords, "debug": debug_info}
-                except:
-                    debug_info.append("  keywordList 파싱 실패")
-            else:
-                debug_info.append("  keywordList 패턴 없음")
+                except Exception as e:
+                    debug_info.append(f"파싱 오류: {str(e)}")
             
-            # 방법 5: 모든 script 태그에서 JSON 찾기
-            script_matches = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
-            debug_info.append(f"  script 태그 {len(script_matches)}개 발견")
-            
-            for i, script in enumerate(script_matches):
-                if '"keywords"' in script or '"keywordList"' in script:
-                    debug_info.append(f"  script[{i}]에 키워드 관련 데이터 있음")
-                    
-                    # JSON 객체 찾기
-                    json_matches = re.findall(r'\{[^{}]*"(?:keywords|keywordList)"[^{}]*\}', script)
-                    for jm in json_matches:
-                        try:
-                            obj = json.loads(jm)
-                            if "keywords" in obj and isinstance(obj["keywords"], list):
-                                return {"success": True, "place_id": place_id, "keywords": obj["keywords"], "debug": debug_info}
-                            if "keywordList" in obj and isinstance(obj["keywordList"], list):
-                                return {"success": True, "place_id": place_id, "keywords": obj["keywordList"], "debug": debug_info}
-                        except:
-                            pass
-            
-            # HTML 일부 저장 (디버깅용)
-            debug_info.append(f"  HTML 앞 500자: {html[:500]}")
+            debug_info.append("키워드 패턴 없음")
+            debug_info.append(f"HTML 앞 300자: {html[:300]}")
                     
     except Exception as e:
-        debug_info.append(f"  오류: {str(e)}")
+        debug_info.append(f"오류: {str(e)}")
     
     return {"success": False, "error": "대표키워드를 찾을 수 없습니다.", "debug": debug_info}
-
-
-def find_keywords_in_json(obj, depth=0):
-    if depth > 20:
-        return None
-    
-    if isinstance(obj, dict):
-        if "keywordList" in obj and isinstance(obj["keywordList"], list):
-            if len(obj["keywordList"]) > 0:
-                first = obj["keywordList"][0]
-                if isinstance(first, str):
-                    return obj["keywordList"]
-        
-        if "keywords" in obj and isinstance(obj["keywords"], list):
-            if len(obj["keywords"]) > 0:
-                first = obj["keywords"][0]
-                if isinstance(first, str):
-                    return obj["keywords"]
-        
-        for value in obj.values():
-            result = find_keywords_in_json(value, depth + 1)
-            if result:
-                return result
-    
-    elif isinstance(obj, list):
-        for item in obj:
-            result = find_keywords_in_json(item, depth + 1)
-            if result:
-                return result
-    
-    return None
 
 
 def format_place_keywords(place_id):
@@ -900,67 +813,7 @@ def home():
 
 
 #############################################
-# 라우트: HTML 내용 확인 (디버깅용)
-#############################################
-@app.route('/test-html')
-def test_html():
-    place_id = request.args.get('id', '37838432')
-    
-    html_url = f"https://m.place.naver.com/restaurant/{place_id}/home"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Accept": "text/html",
-        "Accept-Language": "ko-KR,ko;q=0.9"
-    }
-    
-    try:
-        response = requests.get(html_url, headers=headers, timeout=10)
-        
-        result = f"<h2>플레이스 ID: {place_id}</h2>"
-        result += f"<p>Status: {response.status_code}</p>"
-        result += f"<p>Content-Length: {len(response.text)}</p>"
-        
-        html = response.text
-        
-        # script 태그 확인
-        result += "<h3>Script 태그 분석:</h3>"
-        
-        if '__NEXT_DATA__' in html:
-            result += "<p>✅ __NEXT_DATA__ 존재</p>"
-        else:
-            result += "<p>❌ __NEXT_DATA__ 없음</p>"
-        
-        if '__APOLLO_STATE__' in html:
-            result += "<p>✅ __APOLLO_STATE__ 존재</p>"
-        else:
-            result += "<p>❌ __APOLLO_STATE__ 없음</p>"
-        
-        if '"keywords"' in html:
-            result += "<p>✅ 'keywords' 문자열 존재</p>"
-            # keywords 주변 텍스트 추출
-            kw_idx = html.find('"keywords"')
-            result += f"<pre>keywords 주변: {html[kw_idx:kw_idx+200]}</pre>"
-        else:
-            result += "<p>❌ 'keywords' 없음</p>"
-        
-        if '"keywordList"' in html:
-            result += "<p>✅ 'keywordList' 문자열 존재</p>"
-        else:
-            result += "<p>❌ 'keywordList' 없음</p>"
-        
-        # HTML 앞부분
-        result += "<h3>HTML 앞 2000자:</h3>"
-        result += f"<pre>{html[:2000]}</pre>"
-        
-        return result
-        
-    except Exception as e:
-        return f"<h2>오류</h2><p>{str(e)}</p>"
-
-
-#############################################
-# 라우트: 대표키워드 디버깅
+# 라우트: 대표키워드 테스트
 #############################################
 @app.route('/test-place')
 def test_place():
@@ -971,7 +824,7 @@ def test_place():
     html += f"<h3>결과: {'성공' if result['success'] else '실패'}</h3>"
     
     if result['success']:
-        html += f"<h4>키워드:</h4><ul>"
+        html += f"<h4>키워드 ({len(result['keywords'])}개):</h4><ul>"
         for kw in result['keywords']:
             html += f"<li>{kw}</li>"
         html += "</ul>"
