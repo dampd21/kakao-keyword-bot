@@ -322,9 +322,62 @@ def get_multi_search_volume(keywords):
 
 
 #############################################
-# 기능 2: 연관 키워드 조회 (10개 + 검색량)
+# 기능 2: 연관 키워드 조회 (실제 네이버 검색 결과)
 #############################################
 def get_related_keywords(keyword):
+    """실제 네이버 검색 연관검색어 조회"""
+    try:
+        url = f"https://search.naver.com/search.naver?where=nexearch&query={requests.utils.quote(keyword)}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            html = response.text
+            
+            related_keywords = []
+            
+            # 연관검색어 패턴: <div class="tit">키워드</div>
+            pattern = re.findall(r'<div class="tit">([^<]+)</div>', html)
+            
+            # 중복 제거 및 정제
+            seen = set()
+            for kw in pattern:
+                kw = kw.strip()
+                if kw and kw != keyword and kw not in seen and len(kw) > 1:
+                    seen.add(kw)
+                    related_keywords.append(kw)
+                    if len(related_keywords) >= 10:
+                        break
+            
+            if related_keywords:
+                result_text = f"""[연관검색어] {keyword}
+
+──────────────
+"""
+                for i, kw in enumerate(related_keywords, 1):
+                    result_text += f"{i}. {kw}\n"
+                
+                result_text += """
+──────────────
+※ 네이버 연관검색어 기준"""
+                
+                return result_text
+        
+        # 스크래핑 실패 시 API 사용
+        return get_related_keywords_api(keyword)
+        
+    except Exception as e:
+        return get_related_keywords_api(keyword)
+
+
+def get_related_keywords_api(keyword):
+    """연관검색어 백업 - API 활용"""
     result = get_keyword_data(keyword)
     
     if not result["success"]:
@@ -349,7 +402,7 @@ def get_related_keywords(keyword):
     
     response += """
 ──────────────
-※ 괄호 안은 월간 검색량
+※ 네이버 광고 API 기준
 ※ 경쟁도: [높음] [중간] [낮음]"""
     
     return response
@@ -538,15 +591,16 @@ PC 광고
 
 
 #############################################
-# 기능 4: 블로그 상위 5개 제목
+# 기능 4: 블로그 상위 5개 제목 (실제 네이버 블로그 탭)
 #############################################
 def get_blog_titles(keyword):
     """실제 네이버 블로그 탭 상위 블로그 조회"""
     try:
-        url = f"https://m.search.naver.com/search.naver?where=m_blog&query={requests.utils.quote(keyword)}"
+        # PC 버전 블로그 탭
+        url = f"https://search.naver.com/search.naver?where=blog&query={requests.utils.quote(keyword)}"
         
         headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "ko-KR,ko;q=0.9"
         }
@@ -558,23 +612,44 @@ def get_blog_titles(keyword):
             
             titles = []
             
-            pattern1 = re.findall(r'class="title_area"[^>]*>.*?<a[^>]*>([^<]+)</a>', html, re.DOTALL)
-            pattern2 = re.findall(r'class="total_tit"[^>]*>([^<]+)</a>', html)
-            pattern3 = re.findall(r'class="api_txt_lines[^"]*"[^>]*>([^<]+)</a>', html)
-            pattern4 = re.findall(r'<a[^>]*class="[^"]*tit[^"]*"[^>]*>([^<]+)</a>', html)
+            # 블로그 제목 패턴: sds-comps-text-type-headline1 클래스 안의 텍스트
+            # <mark> 태그 포함 가능
+            pattern1 = re.findall(r'sds-comps-text-type-headline1[^>]*>(.*?)</span>', html, re.DOTALL)
             
-            all_titles = pattern1 + pattern2 + pattern3 + pattern4
-            
-            seen = set()
-            for title in all_titles:
+            for match in pattern1:
+                # <mark> 태그 제거하고 텍스트만 추출
+                title = re.sub(r'<[^>]+>', '', match)
                 title = title.strip()
-                title = re.sub(r'<[^>]+>', '', title)
-                title = re.sub(r'\s+', ' ', title)
-                if title and len(title) > 5 and title not in seen:
-                    seen.add(title)
+                if title and len(title) > 3 and title not in titles:
                     titles.append(title)
                     if len(titles) >= 5:
                         break
+            
+            # 패턴1 실패시 다른 패턴 시도
+            if len(titles) < 5:
+                # 모바일 버전 시도
+                mobile_url = f"https://m.search.naver.com/search.naver?where=m_blog&query={requests.utils.quote(keyword)}"
+                mobile_headers = {
+                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "ko-KR,ko;q=0.9"
+                }
+                
+                mobile_response = requests.get(mobile_url, headers=mobile_headers, timeout=10)
+                
+                if mobile_response.status_code == 200:
+                    mobile_html = mobile_response.text
+                    
+                    # 모바일 패턴
+                    pattern2 = re.findall(r'class="title_area"[^>]*>.*?<a[^>]*>([^<]+)</a>', mobile_html, re.DOTALL)
+                    pattern3 = re.findall(r'class="api_txt_lines[^"]*"[^>]*>([^<]+)</a>', mobile_html)
+                    
+                    for title in pattern2 + pattern3:
+                        title = title.strip()
+                        if title and len(title) > 3 and title not in titles:
+                            titles.append(title)
+                            if len(titles) >= 5:
+                                break
             
             if titles:
                 result = f"""[블로그] {keyword} 상위 5개
@@ -585,7 +660,7 @@ def get_blog_titles(keyword):
                     result += f"{i}. {title}\n\n"
                 
                 result += """──────────────
-※ 실제 네이버 블로그 탭 기준"""
+※ 네이버 블로그 탭 기준"""
                 return result
         
         return get_blog_titles_api(keyword)
