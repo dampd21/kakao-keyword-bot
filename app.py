@@ -410,10 +410,6 @@ def get_place_reviews(keyword, max_count=20):
     }
     
     try:
-        # 네이버 플레이스 검색 API (모바일)
-        search_url = f"https://m.place.naver.com/restaurant/list?query={quote(keyword)}&x=126.9783882&y=37.5666103&level=top"
-        
-        # 대안: 지역검색 결과에서 링크 추출 후 개별 조회
         url = f"https://m.search.naver.com/search.naver?query={quote(keyword)}&where=m_local"
         response = requests.get(url, headers=headers, timeout=10)
         
@@ -422,7 +418,6 @@ def get_place_reviews(keyword, max_count=20):
         
         html = response.text
         
-        # 리뷰 수 패턴 추출 (다양한 패턴 시도)
         reviews = []
         blog_reviews = []
         
@@ -490,12 +485,10 @@ def get_place_reviews(keyword, max_count=20):
 def estimate_business_count(search_volume, comp_idx, region=None):
     """검색량과 경쟁도를 기반으로 업체 수 추정"""
     
-    # 기본 추정: 검색량 대비 업체 수 비율
-    # 일반적으로 검색량 100회당 약 5~10개 업체 존재
-    base_ratio = 0.05  # 검색량의 5%
+    base_ratio = 0.05
     
     if comp_idx == "높음":
-        base_ratio = 0.08  # 경쟁 높으면 업체도 많음
+        base_ratio = 0.08
     elif comp_idx == "중간":
         base_ratio = 0.05
     else:
@@ -503,15 +496,12 @@ def estimate_business_count(search_volume, comp_idx, region=None):
     
     estimated = int(search_volume * base_ratio)
     
-    # 지역별 보정
     if region:
-        region_data = REGION_DATA.get(region, {})
         if region in ["강남", "홍대", "잠실", "해운대"]:
-            estimated = int(estimated * 1.3)  # 대형 상권
+            estimated = int(estimated * 1.3)
         elif region in ["계양", "일산"]:
-            estimated = int(estimated * 0.7)  # 소형 상권
+            estimated = int(estimated * 0.7)
     
-    # 최소/최대 범위 설정
     min_count = max(estimated - int(estimated * 0.2), 100)
     max_count = estimated + int(estimated * 0.2)
     
@@ -524,7 +514,6 @@ def estimate_business_count(search_volume, comp_idx, region=None):
 def estimate_reviews(search_volume, comp_idx):
     """검색량 기반 평균 리뷰 수 추정"""
     
-    # 검색량 높을수록 경쟁 치열 → 상위권 리뷰 수 많음
     if search_volume >= 100000:
         avg_review = random.randint(280, 350)
         avg_blog = random.randint(90, 130)
@@ -541,7 +530,6 @@ def estimate_reviews(search_volume, comp_idx):
         avg_review = random.randint(30, 70)
         avg_blog = random.randint(10, 25)
     
-    # 경쟁도 보정
     if comp_idx == "높음":
         avg_review = int(avg_review * 1.2)
         avg_blog = int(avg_blog * 1.2)
@@ -564,12 +552,103 @@ def extract_region(keyword):
 
 
 #############################################
+# 경쟁 강도 계산 및 광고 전략 동적 생성
+#############################################
+def calculate_competition_level(search_volume, avg_review):
+    """검색량과 리뷰 수 기반 경쟁 강도 계산 (1~4)"""
+    
+    # 검색량 점수 (0~2)
+    if search_volume >= 100000:
+        volume_score = 2
+    elif search_volume >= 50000:
+        volume_score = 1.5
+    elif search_volume >= 20000:
+        volume_score = 1
+    else:
+        volume_score = 0.5
+    
+    # 리뷰 점수 (0~2)
+    if avg_review >= 300:
+        review_score = 2
+    elif avg_review >= 200:
+        review_score = 1.5
+    elif avg_review >= 100:
+        review_score = 1
+    else:
+        review_score = 0.5
+    
+    # 총점 (1~4)
+    total = volume_score + review_score
+    if total >= 3.5:
+        return 4  # 매우 높음
+    elif total >= 2.5:
+        return 3  # 높음
+    elif total >= 1.5:
+        return 2  # 중간
+    else:
+        return 1  # 낮음
+
+
+def generate_ad_strategy(analysis):
+    """경쟁 강도 기반 동적 광고 전략 생성"""
+    
+    search_volume = 0
+    avg_review = 0
+    
+    if analysis.get("search_data"):
+        search_volume = analysis["search_data"]["total"]
+    
+    if analysis.get("review_data"):
+        avg_review = analysis["review_data"]["avg_review"]
+    
+    level = calculate_competition_level(search_volume, avg_review)
+    
+    strategies = {
+        1: {
+            "blog": {"min": 2, "rec": 4},
+            "insta": {"min": 2, "rec": 4},
+            "local": {"min": 1, "rec": 2},
+            "desc": "경쟁 낮음"
+        },
+        2: {
+            "blog": {"min": 4, "rec": 6},
+            "insta": {"min": 4, "rec": 6},
+            "local": {"min": 2, "rec": 4},
+            "desc": "경쟁 중간"
+        },
+        3: {
+            "blog": {"min": 6, "rec": 8},
+            "insta": {"min": 6, "rec": 10},
+            "local": {"min": 3, "rec": 5},
+            "desc": "경쟁 높음"
+        },
+        4: {
+            "blog": {"min": 8, "rec": 12},
+            "insta": {"min": 8, "rec": 12},
+            "local": {"min": 4, "rec": 6},
+            "desc": "경쟁 매우 높음"
+        }
+    }
+    
+    strategy = strategies[level]
+    
+    lines = []
+    lines.append(f"▶ 광고 전략 ({strategy['desc']})")
+    lines.append("• 플레이스광고: 상시 운영")
+    lines.append("• 파워링크: 상시 운영")
+    lines.append(f"• 블로그체험단: 최소 월{strategy['blog']['min']}회 / 권장 월{strategy['blog']['rec']}회")
+    lines.append(f"• 인스타/메타: 최소 월{strategy['insta']['min']}회 / 권장 월{strategy['insta']['rec']}회")
+    lines.append(f"• 지역광고(당근,MY): 최소 월{strategy['local']['min']}회 / 권장 월{strategy['local']['rec']}회")
+    
+    return "\n".join(lines), level
+
+
+#############################################
 # 상권분석 통합 함수
 #############################################
 def get_commercial_analysis(keyword):
     """키워드 기반 상권 분석"""
     
-    # 지역 추출
     region, region_data = extract_region(keyword)
     
     result = {
@@ -599,7 +678,6 @@ def get_commercial_analysis(keyword):
             "comp_idx": comp_idx
         }
         
-        # 업체 수 추정
         result["business_count"] = estimate_business_count(total, comp_idx, region)
     
     # 2. 트렌드 데이터
@@ -613,12 +691,11 @@ def get_commercial_analysis(keyword):
             change = ((last3 - prev3) / prev3) * 100 if prev3 > 0 else 0
         result["trend_data"] = {"series": series, "change": change}
     
-    # 3. 리뷰 데이터 (스크래핑 시도)
+    # 3. 리뷰 데이터 (스크래핑 시도 → 실패시 추정)
     review_result = get_place_reviews(keyword)
     if review_result["success"]:
         result["review_data"] = review_result
     else:
-        # 스크래핑 실패시 추정값 사용
         if result["search_data"]:
             estimated = estimate_reviews(
                 result["search_data"]["total"],
@@ -635,10 +712,10 @@ def get_commercial_analysis(keyword):
 
 
 #############################################
-# 상권분석 포맷팅 (새 버전)
+# 상권분석 포맷팅 (동적 광고 전략 적용)
 #############################################
 def format_commercial_analysis(analysis):
-    """상권분석 결과 포맷팅 - 새 버전"""
+    """상권분석 결과 포맷팅"""
     
     keyword = analysis["keyword"]
     region = analysis["region"]
@@ -674,7 +751,6 @@ def format_commercial_analysis(analysis):
     else:
         lines.append("지역: 전국")
     
-    # 업체 수 추정
     if analysis["business_count"]:
         bc = analysis["business_count"]
         lines.append(f"추정 업체: 약 {format_number(bc['min'])}~{format_number(bc['max'])}개")
@@ -698,9 +774,6 @@ def format_commercial_analysis(analysis):
     price = region_data["price"]
     avg_size = region_data.get("avg_size", {"min": 25, "max": 40})
     
-    # 평당 매출 계산
-    avg_sales = (sales["min"] + sales["max"]) / 2 * 10000  # 원 단위
-    avg_area = (avg_size["min"] + avg_size["max"]) / 2
     pyeong_sales_min = int(sales["min"] * 10000 / avg_size["max"] / 10000)
     pyeong_sales_max = int(sales["max"] * 10000 / avg_size["min"] / 10000)
     
@@ -728,25 +801,21 @@ def format_commercial_analysis(analysis):
     lines.append("PC: 약 1.1%")
     lines.append("")
     
-    # ▶ 광고 전략
-    lines.append("▶ 광고 전략")
-    lines.append("• 플레이스광고: 상시 운영")
-    lines.append("• 파워링크: 상시 운영")
-    lines.append("• 블로그체험단: 최소 월4회 / 권장 월6회")
-    lines.append("• 인스타/메타: 최소 월4회 / 권장 월8회")
-    lines.append("• 지역광고(당근,MY): 최소 월2회 / 권장 월4회")
+    # ▶ 광고 전략 (동적 생성)
+    ad_strategy, comp_level = generate_ad_strategy(analysis)
+    lines.append(ad_strategy)
     lines.append("")
     
     # ▶ 인사이트
     lines.append("▶ 인사이트")
-    insights = generate_insights_v2(analysis, region_data)
+    insights = generate_insights_v2(analysis, region_data, comp_level)
     lines.extend(insights)
     
     return "\n".join(lines)
 
 
-def generate_insights_v2(analysis, region_data):
-    """데이터 기반 인사이트 v2 - 더 구체적"""
+def generate_insights_v2(analysis, region_data, comp_level=2):
+    """데이터 기반 인사이트 v2 - 경쟁 레벨 반영"""
     insights = []
     
     # 1. 시간대 기반 인사이트
@@ -771,10 +840,13 @@ def generate_insights_v2(analysis, region_data):
     elif "관광" in char:
         insights.append("• 관광객 타겟 → 외국어 메뉴/네이버 예약 필수")
     
-    # 3. 경쟁 분석 기반
+    # 3. 경쟁 분석 기반 (레벨에 따라 다른 조언)
     if analysis["review_data"]:
         avg_review = analysis["review_data"]["avg_review"]
-        insights.append(f"• 리뷰 {avg_review}개 넘어야 상위권 경쟁 가능")
+        if comp_level >= 3:
+            insights.append(f"• 리뷰 {avg_review}개 이상 필수, 사진 리뷰 유도")
+        else:
+            insights.append(f"• 리뷰 {avg_review}개 목표, 꾸준히 확보")
     
     # 4. 트렌드 기반
     if analysis["trend_data"]:
@@ -786,19 +858,17 @@ def generate_insights_v2(analysis, region_data):
         else:
             insights.append("• 검색 유지 중 → 꾸준한 리뷰 관리 필수")
     
-    # 5. 검색량 기반
-    if analysis["search_data"]:
-        total = analysis["search_data"]["total"]
-        mobile_ratio = analysis["search_data"]["mobile_ratio"]
-        
-        if mobile_ratio >= 85:
-            insights.append("• 모바일 집중 → 모바일 플레이스 최적화")
+    # 5. 경쟁 레벨 기반 추가 조언
+    if comp_level == 4:
+        insights.append("• 초경쟁 → 차별화 컨셉/시그니처 메뉴 필수")
+    elif comp_level == 1:
+        insights.append("• 경쟁 낮음 → 선점 효과, 빠른 리뷰 확보 유리")
     
-    return insights[:5]  # 최대 5개
+    return insights[:5]
 
 
 #############################################
-# 기능 1: 검색량 조회 (깔끔한 다중 키워드)
+# 기능 1: 검색량 조회
 #############################################
 def get_search_volume(keyword):
     if "," in keyword:
@@ -826,7 +896,7 @@ def get_search_volume(keyword):
 
 
 def get_multi_search_volume(keywords):
-    """다중 키워드 - 깔끔한 포맷"""
+    """다중 키워드 검색량"""
     lines = ["[검색량 비교]", ""]
     
     for keyword in keywords:
@@ -1275,7 +1345,7 @@ def get_help():
 예) 인천맛집
 예) 인천맛집,강남맛집,서울맛집
 
-▶ 상권분석 (트렌드+매출+고객)
+▶ 상권분석 (트렌드+매출+광고전략)
 예) 상권 부평맛집
 예) 상권 강남카페
 
@@ -1296,13 +1366,11 @@ def get_help():
 
 ▶ 재미 기능
 운세 → 운세 870114
-로또 → 로또
-
-경쟁도: [높음] [중간] [낮음]"""
+로또 → 로또"""
 
 
 #############################################
-# 테스트 라우트 (디버깅용)
+# 테스트 라우트
 #############################################
 @app.route('/')
 def home():
@@ -1319,20 +1387,15 @@ def test_review():
 <html><head><meta charset="UTF-8"><title>리뷰 수집 테스트</title></head>
 <body>
 <h2>키워드: {keyword}</h2>
-<h3>결과</h3>
 <p><b>성공:</b> {result.get('success')}</p>
 <p><b>평균 리뷰:</b> {result.get('avg_review', 'N/A')}</p>
 <p><b>평균 블로그:</b> {result.get('avg_blog', 'N/A')}</p>
 <p><b>수집 개수:</b> 리뷰 {result.get('review_count', 0)}개 / 블로그 {result.get('blog_count', 0)}개</p>
 """
-    
     if result.get('reviews'):
         html += f"<p><b>리뷰 리스트:</b> {result['reviews']}</p>"
-    if result.get('blog_reviews'):
-        html += f"<p><b>블로그 리스트:</b> {result['blog_reviews']}</p>"
     if result.get('error'):
         html += f"<p style='color:red'>오류: {result['error']}</p>"
-    
     html += "</body></html>"
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
@@ -1405,7 +1468,7 @@ def kakao_skill():
         if lower_input in ["로또", "로또번호", "lotto"]:
             return create_kakao_response(get_lotto())
         
-        # 상권분석 (상권, 상세, 인사이트, 트렌드)
+        # 상권분석
         if any(lower_input.startswith(cmd) for cmd in ["상권 ", "상세 ", "인사이트 ", "트렌드 "]):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
