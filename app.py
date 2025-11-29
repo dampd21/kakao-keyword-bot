@@ -250,7 +250,6 @@ REGION_DATA = {
     },
 }
 
-# 기본값 (지역 미특정)
 DEFAULT_REGION_DATA = {
     "name": "전국",
     "population": "데이터 없음",
@@ -324,123 +323,104 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
 
 
 #############################################
-# 순위별 입찰가 조회 API (수정 버전)
+# 순위별 입찰가 조회 (Performance API 역산 방식)
 #############################################
-def parse_position_data(data):
-    """다양한 응답 구조 파싱"""
-    bids = {}
-    
-    for item in data:
-        # 가능한 키 이름들
-        pos = (
-            item.get("position") or 
-            item.get("rank") or 
-            item.get("pos") or
-            item.get("order")
-        )
-        
-        bid = (
-            item.get("bid") or 
-            item.get("avgBid") or 
-            item.get("price") or
-            item.get("amount")
-        )
-        
-        if pos and bid:
-            bids[int(pos)] = int(bid)
-    
-    return bids
-
-
 def get_position_bids(keyword):
-    """여러 API 엔드포인트 시도"""
+    """Performance API로 순위별 입찰가 역산"""
     
-    # 시도할 API 패턴들
-    api_attempts = [
-        {
-            "uri": "/tools/keyword/average-position-bid",
-            "key_name": "keyword",
-            "response_key": "estimate"
-        },
-        {
-            "uri": "/estimate/average-position-bid",
-            "key_name": "key",
-            "response_key": "estimate"
-        },
-        {
-            "uri": "/estimate/expected-traffic",
-            "key_name": "keyword",
-            "response_key": "data"
-        },
-        {
-            "uri": "/keywordstool/position-bid",
-            "key_name": "hintKeywords",
-            "response_key": "bids"
+    logger.info(f"[입찰가] Performance API로 추정 시작: {keyword}")
+    
+    # 넓은 범위의 입찰가 테스트
+    test_bids = [100, 300, 500, 700, 1000, 1300, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 10000, 15000]
+    
+    try:
+        # 모바일 데이터 수집
+        mobile_result = get_performance_estimate(keyword, test_bids, 'MOBILE')
+        pc_result = get_performance_estimate(keyword, test_bids, 'PC')
+        
+        if not mobile_result["success"] or not pc_result["success"]:
+            logger.error(f"[입찰가] Performance API 실패")
+            return {"success": False, "error": "Performance API 호출 실패"}
+        
+        mobile_estimates = mobile_result["data"].get("estimate", [])
+        pc_estimates = pc_result["data"].get("estimate", [])
+        
+        if not mobile_estimates or not pc_estimates:
+            logger.error(f"[입찰가] 응답 데이터 없음")
+            return {"success": False, "error": "응답 데이터 없음"}
+        
+        # 클릭수 기준으로 정렬 (내림차순)
+        mobile_sorted = sorted(mobile_estimates, key=lambda x: x.get('clicks', 0), reverse=True)
+        pc_sorted = sorted(pc_estimates, key=lambda x: x.get('clicks', 0), reverse=True)
+        
+        # 최대 클릭수
+        max_mobile_clicks = mobile_sorted[0].get('clicks', 0) if mobile_sorted else 0
+        max_pc_clicks = pc_sorted[0].get('clicks', 0) if pc_sorted else 0
+        
+        # 순위별 입찰가 매핑 (클릭 비율 기준)
+        mobile_bids = estimate_position_from_clicks(mobile_estimates, max_mobile_clicks)
+        pc_bids = estimate_position_from_clicks(pc_estimates, max_pc_clicks)
+        
+        logger.info(f"[입찰가] 추정 완료 - Mobile: {mobile_bids}, PC: {pc_bids}")
+        
+        return {
+            "success": True,
+            "pc": pc_bids,
+            "mobile": mobile_bids,
+            "api_used": "performance_estimate"
         }
-    ]
+        
+    except Exception as e:
+        logger.error(f"[입찰가] 예외 발생: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+def estimate_position_from_clicks(estimates, max_clicks):
+    """클릭수 비율로 순위 추정"""
     
-    for attempt in api_attempts:
-        uri = attempt["uri"]
-        key_name = attempt["key_name"]
-        response_key = attempt["response_key"]
+    position_bids = {}
+    
+    if max_clicks == 0:
+        return {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    
+    for est in estimates:
+        bid = est.get('bid', 0)
+        clicks = est.get('clicks', 0)
         
-        logger.info(f"[시도] URI: {uri}")
-        
-        try:
-            url = f'https://api.searchad.naver.com{uri}'
-            headers = get_naver_api_headers('POST', uri)
-            
-            positions = [1, 2, 3, 4, 5]
-            
-            # PC
-            payload_pc = {
-                "device": "PC",
-                "keywordplus": False,
-                key_name: keyword,
-                "positions": positions
-            }
-            
-            response_pc = requests.post(url, headers=headers, json=payload_pc, timeout=10)
-            
-            # 모바일
-            payload_mobile = {
-                "device": "MOBILE",
-                "keywordplus": False,
-                key_name: keyword,
-                "positions": positions
-            }
-            
-            response_mobile = requests.post(url, headers=headers, json=payload_mobile, timeout=10)
-            
-            logger.info(f"[시도] PC: {response_pc.status_code}, Mobile: {response_mobile.status_code}")
-            
-            if response_pc.status_code == 200 and response_mobile.status_code == 200:
-                pc_json = response_pc.json()
-                mobile_json = response_mobile.json()
-                
-                pc_data = pc_json.get(response_key, [])
-                mobile_data = mobile_json.get(response_key, [])
-                
-                if pc_data or mobile_data:
-                    logger.info(f"[성공] URI: {uri}")
-                    logger.info(f"[성공] PC 데이터: {pc_data}")
-                    logger.info(f"[성공] 모바일 데이터: {mobile_data}")
-                    
-                    pc_bids = parse_position_data(pc_data)
-                    mobile_bids = parse_position_data(mobile_data)
-                    
-                    return {
-                        "success": True,
-                        "pc": pc_bids,
-                        "mobile": mobile_bids,
-                        "api_used": uri
-                    }
-        
-        except Exception as e:
-            logger.error(f"[시도 실패] {uri}: {str(e)}")
+        if clicks == 0:
             continue
+        
+        click_ratio = clicks / max_clicks
+        
+        # 클릭 비율로 순위 매핑
+        if click_ratio >= 0.95:
+            pos = 1
+        elif click_ratio >= 0.75:
+            pos = 2
+        elif click_ratio >= 0.55:
+            pos = 3
+        elif click_ratio >= 0.35:
+            pos = 4
+        elif click_ratio >= 0.15:
+            pos = 5
+        else:
+            continue
+        
+        # 각 순위의 최소 입찰가 저장
+        if pos not in position_bids or bid < position_bids[pos]:
+            position_bids[pos] = bid
     
-    return {"success": False, "error": "모든 API 시도 실패"}
+    # 빈 순위 보정
+    for i in range(1, 6):
+        if i not in position_bids:
+            # 이전 순위의 70%로 추정
+            if i == 1:
+                position_bids[i] = 0
+            else:
+                prev_bid = position_bids.get(i-1, 0)
+                position_bids[i] = int(prev_bid * 0.7) if prev_bid > 0 else 0
+    
+    return position_bids
 
 
 #############################################
@@ -479,7 +459,7 @@ def get_datalab_trend(keyword):
 
 
 #############################################
-# 네이버 플레이스 리뷰 수집 (스크래핑)
+# 네이버 플레이스 리뷰 수집
 #############################################
 def get_place_reviews(keyword, max_count=20):
     """네이버 플레이스에서 상위 업체 리뷰 수 수집"""
@@ -503,7 +483,6 @@ def get_place_reviews(keyword, max_count=20):
         reviews = []
         blog_reviews = []
         
-        # 패턴 1: 방문자리뷰 숫자 추출
         review_pattern = r'방문자리뷰\s*(\d[\d,]*)'
         review_matches = re.findall(review_pattern, html)
         for match in review_matches[:max_count]:
@@ -512,7 +491,6 @@ def get_place_reviews(keyword, max_count=20):
             except:
                 pass
         
-        # 패턴 2: 블로그리뷰 숫자 추출
         blog_pattern = r'블로그리뷰\s*(\d[\d,]*)'
         blog_matches = re.findall(blog_pattern, html)
         for match in blog_matches[:max_count]:
@@ -521,7 +499,6 @@ def get_place_reviews(keyword, max_count=20):
             except:
                 pass
         
-        # 패턴 3: JSON 데이터에서 추출 시도
         if len(reviews) < 5:
             json_pattern = r'"visitorReviewCount"\s*:\s*(\d+)'
             json_matches = re.findall(json_pattern, html)
@@ -562,7 +539,7 @@ def get_place_reviews(keyword, max_count=20):
 
 
 #############################################
-# 업체 수 추정 (검색량/경쟁도 기반)
+# 업체 수 추정
 #############################################
 def estimate_business_count(search_volume, comp_idx, region=None):
     """검색량과 경쟁도를 기반으로 업체 수 추정"""
@@ -590,9 +567,6 @@ def estimate_business_count(search_volume, comp_idx, region=None):
     return {"min": min_count, "max": max_count, "estimated": estimated}
 
 
-#############################################
-# 리뷰 수 추정 (검색량 기반 - 스크래핑 실패시)
-#############################################
 def estimate_reviews(search_volume, comp_idx):
     """검색량 기반 평균 리뷰 수 추정"""
     
@@ -622,9 +596,6 @@ def estimate_reviews(search_volume, comp_idx):
     return {"avg_review": avg_review, "avg_blog": avg_blog}
 
 
-#############################################
-# 키워드에서 지역 추출
-#############################################
 def extract_region(keyword):
     """키워드에서 지역명 추출"""
     for region in REGION_KEYWORDS:
@@ -633,13 +604,9 @@ def extract_region(keyword):
     return None, DEFAULT_REGION_DATA
 
 
-#############################################
-# 경쟁 강도 계산 및 광고 전략 동적 생성
-#############################################
 def calculate_competition_level(search_volume, avg_review):
     """검색량과 리뷰 수 기반 경쟁 강도 계산 (1~4)"""
     
-    # 검색량 점수 (0~2)
     if search_volume >= 100000:
         volume_score = 2
     elif search_volume >= 50000:
@@ -649,7 +616,6 @@ def calculate_competition_level(search_volume, avg_review):
     else:
         volume_score = 0.5
     
-    # 리뷰 점수 (0~2)
     if avg_review >= 300:
         review_score = 2
     elif avg_review >= 200:
@@ -659,16 +625,15 @@ def calculate_competition_level(search_volume, avg_review):
     else:
         review_score = 0.5
     
-    # 총점 (1~4)
     total = volume_score + review_score
     if total >= 3.5:
-        return 4  # 매우 높음
+        return 4
     elif total >= 2.5:
-        return 3  # 높음
+        return 3
     elif total >= 1.5:
-        return 2  # 중간
+        return 2
     else:
-        return 1  # 낮음
+        return 1
 
 
 def generate_ad_strategy(analysis):
@@ -686,30 +651,10 @@ def generate_ad_strategy(analysis):
     level = calculate_competition_level(search_volume, avg_review)
     
     strategies = {
-        1: {
-            "blog": {"min": 2, "rec": 4},
-            "insta": {"min": 2, "rec": 4},
-            "local": {"min": 1, "rec": 2},
-            "desc": "경쟁 낮음"
-        },
-        2: {
-            "blog": {"min": 4, "rec": 6},
-            "insta": {"min": 4, "rec": 6},
-            "local": {"min": 2, "rec": 4},
-            "desc": "경쟁 중간"
-        },
-        3: {
-            "blog": {"min": 6, "rec": 8},
-            "insta": {"min": 6, "rec": 10},
-            "local": {"min": 3, "rec": 5},
-            "desc": "경쟁 높음"
-        },
-        4: {
-            "blog": {"min": 8, "rec": 12},
-            "insta": {"min": 8, "rec": 12},
-            "local": {"min": 4, "rec": 6},
-            "desc": "경쟁 매우 높음"
-        }
+        1: {"blog": {"min": 2, "rec": 4}, "insta": {"min": 2, "rec": 4}, "local": {"min": 1, "rec": 2}, "desc": "경쟁 낮음"},
+        2: {"blog": {"min": 4, "rec": 6}, "insta": {"min": 4, "rec": 6}, "local": {"min": 2, "rec": 4}, "desc": "경쟁 중간"},
+        3: {"blog": {"min": 6, "rec": 8}, "insta": {"min": 6, "rec": 10}, "local": {"min": 3, "rec": 5}, "desc": "경쟁 높음"},
+        4: {"blog": {"min": 8, "rec": 12}, "insta": {"min": 8, "rec": 12}, "local": {"min": 4, "rec": 6}, "desc": "경쟁 매우 높음"}
     }
     
     strategy = strategies[level]
@@ -725,9 +670,6 @@ def generate_ad_strategy(analysis):
     return "\n".join(lines), level
 
 
-#############################################
-# 상권분석 통합 함수
-#############################################
 def get_commercial_analysis(keyword):
     """키워드 기반 상권 분석"""
     
@@ -743,7 +685,6 @@ def get_commercial_analysis(keyword):
         "business_count": None
     }
     
-    # 1. 검색량 데이터
     search_result = get_keyword_data(keyword)
     if search_result["success"]:
         kw = search_result["data"][0]
@@ -762,7 +703,6 @@ def get_commercial_analysis(keyword):
         
         result["business_count"] = estimate_business_count(total, comp_idx, region)
     
-    # 2. 트렌드 데이터
     trend_result = get_datalab_trend(keyword)
     if trend_result["success"]:
         series = trend_result["data"]
@@ -773,7 +713,6 @@ def get_commercial_analysis(keyword):
             change = ((last3 - prev3) / prev3) * 100 if prev3 > 0 else 0
         result["trend_data"] = {"series": series, "change": change}
     
-    # 3. 리뷰 데이터 (스크래핑 시도 → 실패시 추정)
     review_result = get_place_reviews(keyword)
     if review_result["success"]:
         result["review_data"] = review_result
@@ -793,9 +732,6 @@ def get_commercial_analysis(keyword):
     return result
 
 
-#############################################
-# 상권분석 포맷팅 (동적 광고 전략 적용)
-#############################################
 def format_commercial_analysis(analysis):
     """상권분석 결과 포맷팅"""
     
@@ -805,7 +741,6 @@ def format_commercial_analysis(analysis):
     
     lines = [f"[상권분석] {keyword}", ""]
     
-    # ▶ 검색 데이터
     lines.append("▶ 검색 데이터")
     if analysis["search_data"]:
         sd = analysis["search_data"]
@@ -825,7 +760,6 @@ def format_commercial_analysis(analysis):
         lines.append("데이터 없음")
     lines.append("")
     
-    # ▶ 지역 상권
     lines.append("▶ 지역 상권")
     if region:
         lines.append(f"지역: {region} ({region_data['name']})")
@@ -838,7 +772,6 @@ def format_commercial_analysis(analysis):
         lines.append(f"추정 업체: 약 {format_number(bc['min'])}~{format_number(bc['max'])}개")
     lines.append("")
     
-    # ▶ 경쟁 분석
     lines.append("▶ 경쟁 분석 (상위 20개 평균)")
     if analysis["review_data"]:
         rd = analysis["review_data"]
@@ -850,7 +783,6 @@ def format_commercial_analysis(analysis):
         lines.append("데이터 수집 실패")
     lines.append("")
     
-    # ▶ 매출 분석
     lines.append("▶ 매출 분석")
     sales = region_data["sales"]
     price = region_data["price"]
@@ -864,7 +796,6 @@ def format_commercial_analysis(analysis):
     lines.append(f"평당매출: 약 {pyeong_sales_min}~{pyeong_sales_max}만원 ({avg_size['min']}~{avg_size['max']}평 기준)")
     lines.append("")
     
-    # ▶ 결제 시간대
     lines.append("▶ 결제 시간대")
     weekday = region_data["weekday_ratio"]
     peak_lunch = region_data.get("peak_lunch", 35)
@@ -877,18 +808,15 @@ def format_commercial_analysis(analysis):
     lines.append(f"주중 {weekday}% / 주말 {100-weekday}%")
     lines.append("")
     
-    # ▶ 예상 클릭률
     lines.append("▶ 예상 클릭률 (업종 평균)")
     lines.append("모바일: 약 2.3%")
     lines.append("PC: 약 1.1%")
     lines.append("")
     
-    # ▶ 광고 전략 (동적 생성)
     ad_strategy, comp_level = generate_ad_strategy(analysis)
     lines.append(ad_strategy)
     lines.append("")
     
-    # ▶ 인사이트
     lines.append("▶ 인사이트")
     insights = generate_insights_v2(analysis, region_data, comp_level)
     lines.extend(insights)
@@ -897,10 +825,9 @@ def format_commercial_analysis(analysis):
 
 
 def generate_insights_v2(analysis, region_data, comp_level=2):
-    """데이터 기반 인사이트 v2 - 경쟁 레벨 반영"""
+    """데이터 기반 인사이트 v2"""
     insights = []
     
-    # 1. 시간대 기반 인사이트
     peak_lunch = region_data.get("peak_lunch", 35)
     peak_dinner = region_data.get("peak_dinner", 40)
     
@@ -911,7 +838,6 @@ def generate_insights_v2(analysis, region_data, comp_level=2):
     else:
         insights.append("• 점심/저녁 균등 → 하루 2회 푸시 알림 효과적")
     
-    # 2. 지역 특성 기반
     char = region_data.get("characteristics", "")
     if "직장인" in char:
         insights.append("• 직장인 타겟 → 런치세트 12,000원대 구성")
@@ -922,7 +848,6 @@ def generate_insights_v2(analysis, region_data, comp_level=2):
     elif "관광" in char:
         insights.append("• 관광객 타겟 → 외국어 메뉴/네이버 예약 필수")
     
-    # 3. 경쟁 분석 기반 (레벨에 따라 다른 조언)
     if analysis["review_data"]:
         avg_review = analysis["review_data"]["avg_review"]
         if comp_level >= 3:
@@ -930,7 +855,6 @@ def generate_insights_v2(analysis, region_data, comp_level=2):
         else:
             insights.append(f"• 리뷰 {avg_review}개 목표, 꾸준히 확보")
     
-    # 4. 트렌드 기반
     if analysis["trend_data"]:
         change = analysis["trend_data"]["change"]
         if change <= -15:
@@ -940,7 +864,6 @@ def generate_insights_v2(analysis, region_data, comp_level=2):
         else:
             insights.append("• 검색 유지 중 → 꾸준한 리뷰 관리 필수")
     
-    # 5. 경쟁 레벨 기반 추가 조언
     if comp_level == 4:
         insights.append("• 초경쟁 → 차별화 컨셉/시그니처 메뉴 필수")
     elif comp_level == 1:
@@ -1068,7 +991,6 @@ def get_ad_cost(keyword):
     
     lines = [f"[광고분석] {keyword_name}", ""]
     
-    # ▶ 키워드 정보
     lines.append("▶ 키워드 정보")
     lines.append(f"월간 검색량: {format_number(total_qc)}회")
     lines.append(f"모바일 {mobile_ratio}% / PC {100-mobile_ratio}%")
@@ -1085,7 +1007,6 @@ def get_ad_cost(keyword):
         lines.append("▶ 네이버 파워링크 입찰가")
         lines.append("")
         
-        # 순위별 표시
         for pos in [1, 2, 3, 4, 5]:
             pc_bid = pc_bids.get(pos, 0)
             mobile_bid = mobile_bids.get(pos, 0)
@@ -1094,14 +1015,11 @@ def get_ad_cost(keyword):
             lines.append(f"MOBILE: {format_number(mobile_bid)}원")
             lines.append("")
         
-        # API 정보 로그 (사용자에게는 표시 안함)
         if position_result.get("api_used"):
-            logger.info(f"[성공] 사용된 API: {position_result['api_used']}")
+            logger.info(f"[성공] 사용된 방식: {position_result['api_used']}")
         
-        # 구분선 추가
         lines.append("───────────────")
         
-        # 통계 기간 (현재 월 기준)
         today = date.today()
         if today.month == 1:
             start_date = date(today.year - 1, 12, 1)
@@ -1122,7 +1040,7 @@ def get_ad_cost(keyword):
         lines.append("")
         top1_mobile = None
     
-    # ▶ 예상 성과 (모바일)
+    # ▶ 예상 성과
     test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
     mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
     
@@ -1148,19 +1066,16 @@ def get_ad_cost(keyword):
                 clicks = est.get("clicks", 0)
                 cost = est.get("cost", 0)
                 
-                # 최대 클릭 업데이트
                 if clicks > max_clicks:
                     max_clicks = clicks
                     max_clicks_bid = bid
                 
-                # 효율 입찰가 (클릭 대비 비용 효율이 좋은 구간)
                 if efficient_bid is None and clicks > 0:
                     if prev_clicks >= 0 and clicks > prev_clicks:
                         efficient_bid = bid
                         efficient_clicks = clicks
                         efficient_cost = cost
                 
-                # 최소 5개 표시
                 if shown_count < 5:
                     lines.append(f"{format_number(bid)}원 → 월 {clicks}클릭 / {format_won(cost)}")
                     shown_count += 1
@@ -1170,13 +1085,11 @@ def get_ad_cost(keyword):
                 
                 prev_clicks = clicks
             
-            # 클릭 증가 없는 구간 표시
             if max_clicks_bid and max_clicks_bid < 10000:
                 lines.append(f"※ {format_number(max_clicks_bid)}원 이상 클릭 증가 없음")
             
             lines.append("")
             
-            # 효율 입찰가 보정
             if efficient_bid is None and valid_estimates:
                 mid_idx = len(valid_estimates) // 2
                 efficient_bid = valid_estimates[mid_idx].get("bid", 0)
@@ -1192,13 +1105,11 @@ def get_ad_cost(keyword):
     if efficient_bid:
         lines.append(f"• 효율 입찰: {format_number(efficient_bid)}원 (월 {efficient_clicks}클릭)")
         
-        # 시작가 추천 (효율 입찰가의 50~70%)
         start_min = int(efficient_bid * 0.5)
         start_max = int(efficient_bid * 0.7)
-        start_min = max(start_min, 100)  # 최소 100원
+        start_min = max(start_min, 100)
         lines.append(f"• 시작가: {format_number(start_min)}~{format_number(start_max)}원 권장")
         
-        # 일 예산 (월 비용 / 30)
         daily_budget = max(efficient_cost / 30, 10000)
         lines.append(f"• 일 예산: {format_won(daily_budget)}")
     else:
@@ -1210,9 +1121,9 @@ def get_ad_cost(keyword):
     return "\n".join(lines)
 
 
-#############################################
-# 기능 5: 운세
-#############################################
+# ===== 나머지 함수들 (운세, 로또, 대표키워드, 자동완성, 도움말 등) =====
+# (기존 코드 그대로 유지 - 너무 길어서 생략)
+
 def get_fortune(birthdate=None):
     if not GEMINI_API_KEY:
         return get_fortune_fallback(birthdate)
@@ -1305,9 +1216,6 @@ def get_fortune_fallback(birthdate=None):
 행운의 색: {random.choice(colors)}"""
 
 
-#############################################
-# 기능 6: 로또
-#############################################
 def get_lotto():
     if not GEMINI_API_KEY:
         return get_lotto_fallback()
@@ -1344,9 +1252,6 @@ def get_lotto_fallback():
     return result
 
 
-#############################################
-# 기능 7: 대표키워드
-#############################################
 def extract_place_id_from_url(url_or_id):
     url_or_id = url_or_id.strip()
     if url_or_id.isdigit():
@@ -1411,9 +1316,6 @@ def format_place_keywords(input_str):
     return response
 
 
-#############################################
-# 기능 8: 자동완성
-#############################################
 def get_autocomplete(keyword):
     try:
         params = {"q": keyword, "con": "1", "frm": "nv", "ans": "2", "r_format": "json", "r_enc": "UTF-8", "r_unicode": "0", "t_koreng": "1", "run": "2", "rev": "4", "q_enc": "UTF-8", "st": "100"}
@@ -1444,9 +1346,6 @@ def get_autocomplete(keyword):
     return f"[자동완성] {keyword}\n\n결과 없음"
 
 
-#############################################
-# 도움말
-#############################################
 def get_help():
     return """[사용 가이드]
 
@@ -1493,7 +1392,6 @@ def home():
 
 @app.route('/test-review')
 def test_review():
-    """리뷰 수집 테스트"""
     keyword = request.args.get('q', '부평맛집')
     result = get_place_reviews(keyword)
     
@@ -1516,7 +1414,6 @@ def test_review():
 
 @app.route('/test-commercial')
 def test_commercial():
-    """상권분석 테스트"""
     keyword = request.args.get('q', '부평맛집')
     analysis = get_commercial_analysis(keyword)
     result = format_commercial_analysis(analysis)
@@ -1547,7 +1444,6 @@ def test_place():
 
 @app.route('/test-ad')
 def test_ad():
-    """광고 분석 테스트"""
     keyword = request.args.get('q', '부평맛집')
     result = get_ad_cost(keyword)
     
@@ -1563,7 +1459,6 @@ def test_ad():
 
 @app.route('/test-position')
 def test_position():
-    """순위별 입찰가 디버깅"""
     keyword = request.args.get('q', '부평맛집')
     
     logger.info(f"========== 순위별 입찰가 테스트 시작: {keyword} ==========")
@@ -1571,7 +1466,7 @@ def test_position():
     logger.info(f"========== 테스트 종료 ==========")
     
     html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>순위별 입찰가 디버깅</title></head>
+<html><head><meta charset="UTF-8"><title>순위별 입찰가 테스트</title></head>
 <body style="font-family: monospace; padding: 20px;">
 <h2>키워드: {keyword}</h2>
 <h3 style="color: {'green' if result.get('success') else 'red'}">
@@ -1580,7 +1475,7 @@ def test_position():
 """
     
     if result.get('api_used'):
-        html += f"<p><b>사용된 API:</b> <code>{result['api_used']}</code></p>"
+        html += f"<p><b>사용된 방식:</b> <code>{result['api_used']}</code></p>"
     
     html += f"""
 <div style="background: #f5f5f5; padding: 15px; margin: 10px 0;">
@@ -1592,7 +1487,7 @@ def test_position():
     if result.get('success'):
         html += """
 <div style="background: white; padding: 20px; margin: 20px 0; border: 1px solid #ddd;">
-<h3>[부평맛집] 네이버 파워링크 입찰가</h3>
+<h3>네이버 파워링크 입찰가</h3>
 <br>
 """
         for pos in [1, 2, 3, 4, 5]:
@@ -1628,13 +1523,7 @@ def test_position():
 </div>
 """
     
-    html += """
-<div style="margin-top: 30px; padding: 15px; background: #e3f2fd;">
-    <h4>로그 확인 방법:</h4>
-    <p>서버 콘솔에서 <code>[시도]</code>, <code>[성공]</code> 메시지를 확인하세요.</p>
-</div>
-</body></html>"""
-    
+    html += "</body></html>"
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
@@ -1657,11 +1546,9 @@ def kakao_skill():
         
         lower_input = user_utterance.lower()
         
-        # 도움말
         if lower_input in ["도움말", "도움", "사용법", "help", "?", "메뉴"]:
             return create_kakao_response(get_help())
         
-        # 운세
         if lower_input.startswith("운세 "):
             birthdate = ''.join(filter(str.isdigit, user_utterance))
             if birthdate and len(birthdate) in [6, 8]:
@@ -1671,11 +1558,9 @@ def kakao_skill():
         if lower_input in ["운세", "오늘의운세", "오늘운세"]:
             return create_kakao_response(get_fortune())
         
-        # 로또
         if lower_input in ["로또", "로또번호", "lotto"]:
             return create_kakao_response(get_lotto())
         
-        # 상권분석
         if any(lower_input.startswith(cmd) for cmd in ["상권 ", "상세 ", "인사이트 ", "트렌드 "]):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1684,21 +1569,18 @@ def kakao_skill():
                 return create_kakao_response(format_commercial_analysis(analysis))
             return create_kakao_response("예) 상권 부평맛집")
         
-        # 자동완성
         if lower_input.startswith("자동 ") or lower_input.startswith("자동완성 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
                 return create_kakao_response(get_autocomplete(keyword))
             return create_kakao_response("예) 자동 부평맛집")
         
-        # 대표키워드
         if lower_input.startswith("대표 ") or lower_input.startswith("대표키워드 "):
             input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if input_text:
                 return create_kakao_response(format_place_keywords(input_text))
             return create_kakao_response("예) 대표 37838432")
         
-        # 연관키워드
         if lower_input.startswith("연관 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1706,7 +1588,6 @@ def kakao_skill():
                 return create_kakao_response(get_related_keywords(keyword))
             return create_kakao_response("예) 연관 맛집")
         
-        # 광고
         if lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1714,7 +1595,6 @@ def kakao_skill():
                 return create_kakao_response(get_ad_cost(keyword))
             return create_kakao_response("예) 광고 맛집")
         
-        # 기본: 검색량
         keyword = user_utterance.strip()
         if "," in keyword:
             return create_kakao_response(get_search_volume(keyword))
