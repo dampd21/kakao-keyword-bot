@@ -326,15 +326,18 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
 # 순위별 입찰가 조회 (Performance API 역산 방식)
 #############################################
 def get_position_bids(keyword):
-    """Performance API로 순위별 입찰가 역산"""
+    """Performance API로 순위별 입찰가 역산 - 최종 버전"""
     
     logger.info(f"[입찰가] Performance API로 추정 시작: {keyword}")
     
     # 넓은 범위의 입찰가 테스트
-    test_bids = [100, 300, 500, 700, 1000, 1300, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 10000, 15000]
+    test_bids = [
+        50, 100, 200, 300, 500, 700, 
+        1000, 1300, 1500, 1700, 2000, 2500, 3000, 
+        4000, 5000, 7000, 10000, 15000, 20000, 30000
+    ]
     
     try:
-        # 모바일 데이터 수집
         mobile_result = get_performance_estimate(keyword, test_bids, 'MOBILE')
         pc_result = get_performance_estimate(keyword, test_bids, 'PC')
         
@@ -349,17 +352,37 @@ def get_position_bids(keyword):
             logger.error(f"[입찰가] 응답 데이터 없음")
             return {"success": False, "error": "응답 데이터 없음"}
         
-        # 클릭수 기준으로 정렬 (내림차순)
-        mobile_sorted = sorted(mobile_estimates, key=lambda x: x.get('clicks', 0), reverse=True)
-        pc_sorted = sorted(pc_estimates, key=lambda x: x.get('clicks', 0), reverse=True)
+        # 클릭수 기준 정렬
+        mobile_sorted = sorted(
+            [e for e in mobile_estimates if e.get('clicks', 0) > 0],
+            key=lambda x: x.get('clicks', 0), 
+            reverse=True
+        )
         
-        # 최대 클릭수
-        max_mobile_clicks = mobile_sorted[0].get('clicks', 0) if mobile_sorted else 0
-        max_pc_clicks = pc_sorted[0].get('clicks', 0) if pc_sorted else 0
+        pc_sorted = sorted(
+            [e for e in pc_estimates if e.get('clicks', 0) > 0],
+            key=lambda x: x.get('clicks', 0), 
+            reverse=True
+        )
         
-        # 순위별 입찰가 매핑 (클릭 비율 기준)
-        mobile_bids = estimate_position_from_clicks(mobile_estimates, max_mobile_clicks)
-        pc_bids = estimate_position_from_clicks(pc_estimates, max_pc_clicks)
+        # 상위 5개를 1~5위로 매핑
+        mobile_bids = {}
+        pc_bids = {}
+        
+        for i in range(min(5, len(mobile_sorted))):
+            mobile_bids[i + 1] = mobile_sorted[i].get('bid', 0)
+        
+        for i in range(min(5, len(pc_sorted))):
+            pc_bids[i + 1] = pc_sorted[i].get('bid', 0)
+        
+        # 빈 순위 보정
+        for device_bids in [mobile_bids, pc_bids]:
+            if len(device_bids) < 5:
+                last_pos = len(device_bids)
+                last_bid = device_bids.get(last_pos, 100) if last_pos > 0 else 100
+                
+                for i in range(last_pos + 1, 6):
+                    device_bids[i] = max(int(last_bid * (0.7 ** (i - last_pos))), 50)
         
         logger.info(f"[입찰가] 추정 완료 - Mobile: {mobile_bids}, PC: {pc_bids}")
         
@@ -373,54 +396,6 @@ def get_position_bids(keyword):
     except Exception as e:
         logger.error(f"[입찰가] 예외 발생: {str(e)}")
         return {"success": False, "error": str(e)}
-
-
-def estimate_position_from_clicks(estimates, max_clicks):
-    """클릭수 비율로 순위 추정"""
-    
-    position_bids = {}
-    
-    if max_clicks == 0:
-        return {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
-    
-    for est in estimates:
-        bid = est.get('bid', 0)
-        clicks = est.get('clicks', 0)
-        
-        if clicks == 0:
-            continue
-        
-        click_ratio = clicks / max_clicks
-        
-        # 클릭 비율로 순위 매핑
-        if click_ratio >= 0.95:
-            pos = 1
-        elif click_ratio >= 0.75:
-            pos = 2
-        elif click_ratio >= 0.55:
-            pos = 3
-        elif click_ratio >= 0.35:
-            pos = 4
-        elif click_ratio >= 0.15:
-            pos = 5
-        else:
-            continue
-        
-        # 각 순위의 최소 입찰가 저장
-        if pos not in position_bids or bid < position_bids[pos]:
-            position_bids[pos] = bid
-    
-    # 빈 순위 보정
-    for i in range(1, 6):
-        if i not in position_bids:
-            # 이전 순위의 70%로 추정
-            if i == 1:
-                position_bids[i] = 0
-            else:
-                prev_bid = position_bids.get(i-1, 0)
-                position_bids[i] = int(prev_bid * 0.7) if prev_bid > 0 else 0
-    
-    return position_bids
 
 
 #############################################
