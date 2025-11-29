@@ -324,71 +324,123 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
 
 
 #############################################
-# 순위별 입찰가 조회 API
+# 순위별 입찰가 조회 API (수정 버전)
 #############################################
+def parse_position_data(data):
+    """다양한 응답 구조 파싱"""
+    bids = {}
+    
+    for item in data:
+        # 가능한 키 이름들
+        pos = (
+            item.get("position") or 
+            item.get("rank") or 
+            item.get("pos") or
+            item.get("order")
+        )
+        
+        bid = (
+            item.get("bid") or 
+            item.get("avgBid") or 
+            item.get("price") or
+            item.get("amount")
+        )
+        
+        if pos and bid:
+            bids[int(pos)] = int(bid)
+    
+    return bids
+
+
 def get_position_bids(keyword):
-    """순위별 입찰가 조회 (1~5위) - 디버깅 버전"""
+    """여러 API 엔드포인트 시도"""
     
-    try:
-        uri = '/estimate/average-position-bid'
-        url = f'https://api.searchad.naver.com{uri}'
-        headers = get_naver_api_headers('POST', uri)
-        
-        positions = [1, 2, 3, 4, 5]
-        
-        # PC 입찰가
-        payload_pc = {
-            "device": "PC",
-            "keywordplus": False,
-            "key": keyword,
-            "positions": positions
+    # 시도할 API 패턴들
+    api_attempts = [
+        {
+            "uri": "/tools/keyword/average-position-bid",
+            "key_name": "keyword",
+            "response_key": "estimate"
+        },
+        {
+            "uri": "/estimate/average-position-bid",
+            "key_name": "key",
+            "response_key": "estimate"
+        },
+        {
+            "uri": "/estimate/expected-traffic",
+            "key_name": "keyword",
+            "response_key": "data"
+        },
+        {
+            "uri": "/keywordstool/position-bid",
+            "key_name": "hintKeywords",
+            "response_key": "bids"
         }
+    ]
+    
+    for attempt in api_attempts:
+        uri = attempt["uri"]
+        key_name = attempt["key_name"]
+        response_key = attempt["response_key"]
         
-        logger.info(f"[디버그] PC 입찰가 요청: {keyword}")
-        response_pc = requests.post(url, headers=headers, json=payload_pc, timeout=10)
-        logger.info(f"[디버그] PC 응답 코드: {response_pc.status_code}")
-        logger.info(f"[디버그] PC 응답 본문: {response_pc.text[:500]}")
+        logger.info(f"[시도] URI: {uri}")
         
-        # 모바일 입찰가
-        payload_mobile = {
-            "device": "MOBILE",
-            "keywordplus": False,
-            "key": keyword,
-            "positions": positions
-        }
-        
-        logger.info(f"[디버그] 모바일 입찰가 요청: {keyword}")
-        response_mobile = requests.post(url, headers=headers, json=payload_mobile, timeout=10)
-        logger.info(f"[디버그] 모바일 응답 코드: {response_mobile.status_code}")
-        logger.info(f"[디버그] 모바일 응답 본문: {response_mobile.text[:500]}")
-        
-        if response_pc.status_code == 200 and response_mobile.status_code == 200:
-            pc_data = response_pc.json().get("estimate", [])
-            mobile_data = response_mobile.json().get("estimate", [])
+        try:
+            url = f'https://api.searchad.naver.com{uri}'
+            headers = get_naver_api_headers('POST', uri)
             
-            logger.info(f"[디버그] PC 데이터: {pc_data}")
-            logger.info(f"[디버그] 모바일 데이터: {mobile_data}")
+            positions = [1, 2, 3, 4, 5]
             
-            # 순위별로 정리
-            pc_bids = {item.get("position"): item.get("bid", 0) for item in pc_data}
-            mobile_bids = {item.get("position"): item.get("bid", 0) for item in mobile_data}
-            
-            logger.info(f"[디버그] 정리된 PC: {pc_bids}")
-            logger.info(f"[디버그] 정리된 모바일: {mobile_bids}")
-            
-            return {
-                "success": True,
-                "pc": pc_bids,
-                "mobile": mobile_bids
+            # PC
+            payload_pc = {
+                "device": "PC",
+                "keywordplus": False,
+                key_name: keyword,
+                "positions": positions
             }
+            
+            response_pc = requests.post(url, headers=headers, json=payload_pc, timeout=10)
+            
+            # 모바일
+            payload_mobile = {
+                "device": "MOBILE",
+                "keywordplus": False,
+                key_name: keyword,
+                "positions": positions
+            }
+            
+            response_mobile = requests.post(url, headers=headers, json=payload_mobile, timeout=10)
+            
+            logger.info(f"[시도] PC: {response_pc.status_code}, Mobile: {response_mobile.status_code}")
+            
+            if response_pc.status_code == 200 and response_mobile.status_code == 200:
+                pc_json = response_pc.json()
+                mobile_json = response_mobile.json()
+                
+                pc_data = pc_json.get(response_key, [])
+                mobile_data = mobile_json.get(response_key, [])
+                
+                if pc_data or mobile_data:
+                    logger.info(f"[성공] URI: {uri}")
+                    logger.info(f"[성공] PC 데이터: {pc_data}")
+                    logger.info(f"[성공] 모바일 데이터: {mobile_data}")
+                    
+                    pc_bids = parse_position_data(pc_data)
+                    mobile_bids = parse_position_data(mobile_data)
+                    
+                    return {
+                        "success": True,
+                        "pc": pc_bids,
+                        "mobile": mobile_bids,
+                        "api_used": uri
+                    }
         
-        error_msg = f"PC={response_pc.status_code}, Mobile={response_mobile.status_code}"
-        logger.error(f"[디버그] API 오류: {error_msg}")
-        return {"success": False, "error": error_msg}
+        except Exception as e:
+            logger.error(f"[시도 실패] {uri}: {str(e)}")
+            continue
     
-    except Exception as e:
-        logger.error(f"[디버그] 예외 발생: {str(e)}", exc_info=True)
-        return {"success": False, "error": str(e)}
+    return {"success": False, "error": "모든 API 시도 실패"}
 
 
 #############################################
@@ -1000,7 +1052,7 @@ def get_related_keywords_api(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 (통합 버전)
+# 기능 3: 광고 단가 (수정 버전)
 #############################################
 def get_ad_cost(keyword):
     result = get_keyword_data(keyword)
@@ -1030,24 +1082,45 @@ def get_ad_cost(keyword):
         pc_bids = position_result["pc"]
         mobile_bids = position_result["mobile"]
         
-        lines.append("▶ 순위별 입찰가")
-        lines.append("      PC      모바일")
+        lines.append("▶ 네이버 파워링크 입찰가")
+        lines.append("")
+        
+        # 순위별 표시
         for pos in [1, 2, 3, 4, 5]:
             pc_bid = pc_bids.get(pos, 0)
             mobile_bid = mobile_bids.get(pos, 0)
-            lines.append(f"{pos}위  {format_number(pc_bid):>6}원  {format_number(mobile_bid):>6}원")
+            lines.append(f"{pos}위")
+            lines.append(f"PC: {format_number(pc_bid)}원")
+            lines.append(f"MOBILE: {format_number(mobile_bid)}원")
+            lines.append("")
+        
+        # API 정보 로그 (사용자에게는 표시 안함)
+        if position_result.get("api_used"):
+            logger.info(f"[성공] 사용된 API: {position_result['api_used']}")
+        
+        # 구분선 추가
+        lines.append("───────────────")
+        
+        # 통계 기간 (현재 월 기준)
+        today = date.today()
+        if today.month == 1:
+            start_date = date(today.year - 1, 12, 1)
+            end_date = date(today.year, 1, 1)
+        else:
+            start_date = date(today.year, today.month - 1, 1)
+            end_date = date(today.year, today.month, 1)
+        
+        lines.append(f"통계 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
         lines.append("")
         
         top1_mobile = mobile_bids.get(1, 0)
     else:
-        # ❌ 실패 처리 추가
         logger.error(f"순위별 입찰가 조회 실패: {position_result.get('error')}")
         lines.append("▶ 순위별 입찰가")
         lines.append(f"※ 조회 실패: {position_result.get('error', '알 수 없는 오류')}")
         lines.append("(아래 예상 성과 참고)")
         lines.append("")
         top1_mobile = None
-
     
     # ▶ 예상 성과 (모바일)
     test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
@@ -1487,10 +1560,11 @@ def test_ad():
 </body></html>"""
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
+
 @app.route('/test-position')
 def test_position():
     """순위별 입찰가 디버깅"""
-    keyword = request.args.get('q', '강남맛집')
+    keyword = request.args.get('q', '부평맛집')
     
     logger.info(f"========== 순위별 입찰가 테스트 시작: {keyword} ==========")
     result = get_position_bids(keyword)
@@ -1503,7 +1577,12 @@ def test_position():
 <h3 style="color: {'green' if result.get('success') else 'red'}">
     {'✅ 성공' if result.get('success') else '❌ 실패'}
 </h3>
-
+"""
+    
+    if result.get('api_used'):
+        html += f"<p><b>사용된 API:</b> <code>{result['api_used']}</code></p>"
+    
+    html += f"""
 <div style="background: #f5f5f5; padding: 15px; margin: 10px 0;">
     <h4>원본 응답:</h4>
     <pre>{json.dumps(result, ensure_ascii=False, indent=2)}</pre>
@@ -1512,24 +1591,35 @@ def test_position():
     
     if result.get('success'):
         html += """
-<table border="1" cellpadding="10" style="margin-top: 20px; border-collapse: collapse;">
-    <tr style="background: #4CAF50; color: white;">
-        <th>순위</th>
-        <th>PC 입찰가</th>
-        <th>모바일 입찰가</th>
-    </tr>
+<div style="background: white; padding: 20px; margin: 20px 0; border: 1px solid #ddd;">
+<h3>[부평맛집] 네이버 파워링크 입찰가</h3>
+<br>
 """
         for pos in [1, 2, 3, 4, 5]:
             pc_bid = result['pc'].get(pos, 0)
             mobile_bid = result['mobile'].get(pos, 0)
             html += f"""
-    <tr>
-        <td style="text-align: center;">{pos}위</td>
-        <td style="text-align: right;">{format_number(pc_bid)}원</td>
-        <td style="text-align: right;">{format_number(mobile_bid)}원</td>
-    </tr>
+<div style="margin-bottom: 15px;">
+    <b>{pos}위</b><br>
+    PC: {format_number(pc_bid)}원<br>
+    MOBILE: {format_number(mobile_bid)}원
+</div>
 """
-        html += "</table>"
+        
+        today = date.today()
+        if today.month == 1:
+            start_date = date(today.year - 1, 12, 1)
+            end_date = date(today.year, 1, 1)
+        else:
+            start_date = date(today.year, today.month - 1, 1)
+            end_date = date(today.year, today.month, 1)
+        
+        html += f"""
+<div style="border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;">
+통계 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}
+</div>
+</div>
+"""
     else:
         html += f"""
 <div style="background: #ffebee; padding: 15px; margin: 10px 0; color: #c62828;">
@@ -1541,12 +1631,7 @@ def test_position():
     html += """
 <div style="margin-top: 30px; padding: 15px; background: #e3f2fd;">
     <h4>로그 확인 방법:</h4>
-    <p>서버 콘솔에서 <code>[디버그]</code> 메시지를 확인하세요.</p>
-    <ul>
-        <li>요청 URL 확인</li>
-        <li>응답 코드 확인 (200이어야 함)</li>
-        <li>응답 본문 확인</li>
-    </ul>
+    <p>서버 콘솔에서 <code>[시도]</code>, <code>[성공]</code> 메시지를 확인하세요.</p>
 </div>
 </body></html>"""
     
