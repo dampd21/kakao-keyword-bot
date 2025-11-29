@@ -77,36 +77,156 @@ def is_guide_message(text):
 
 
 #############################################
-# 지역/업종 코드 매핑
+# 지역별 상권 특성 데이터
 #############################################
-REGION_CODE_MAP = {
-    "부평": {"code": "2832000000", "name": "인천 부평구"},
-    "계양": {"code": "2824500000", "name": "인천 계양구"},
-    "송도": {"code": "2826000000", "name": "인천 연수구"},
-    "강남": {"code": "1168000000", "name": "서울 강남구"},
-    "홍대": {"code": "1144000000", "name": "서울 마포구"},
-    "서초": {"code": "1165000000", "name": "서울 서초구"},
-    "잠실": {"code": "1171000000", "name": "서울 송파구"},
-    "해운대": {"code": "2626000000", "name": "부산 해운대구"},
-    "서면": {"code": "2617000000", "name": "부산 부산진구"},
-    "분당": {"code": "4113500000", "name": "경기 성남시"},
-    "일산": {"code": "4128700000", "name": "경기 고양시"},
-    "수원": {"code": "4111100000", "name": "경기 수원시"},
+REGION_DATA = {
+    "부평": {
+        "code": "2832000000",
+        "name": "인천 부평구",
+        "population": "4~5만명",
+        "sales": {"min": 2000, "max": 3000},
+        "price": {"min": 18000, "max": 22000},
+        "weekday_ratio": 70,
+        "peak_time": "점심 위주 (직장인)",
+        "age_group": "2030",
+        "characteristics": "직장인 밀집, 주거 복합"
+    },
+    "계양": {
+        "code": "2824500000",
+        "name": "인천 계양구",
+        "population": "2~3만명",
+        "sales": {"min": 1500, "max": 2500},
+        "price": {"min": 15000, "max": 20000},
+        "weekday_ratio": 65,
+        "peak_time": "저녁 위주 (가족)",
+        "age_group": "3040",
+        "characteristics": "주거 중심, 가족 단위"
+    },
+    "송도": {
+        "code": "2826000000",
+        "name": "인천 연수구",
+        "population": "3~4만명",
+        "sales": {"min": 2500, "max": 4000},
+        "price": {"min": 20000, "max": 28000},
+        "weekday_ratio": 60,
+        "peak_time": "저녁/주말 (데이트)",
+        "age_group": "2030",
+        "characteristics": "신도시, 젊은 가족, 고소득"
+    },
+    "강남": {
+        "code": "1168000000",
+        "name": "서울 강남구",
+        "population": "8~10만명",
+        "sales": {"min": 4000, "max": 7000},
+        "price": {"min": 25000, "max": 40000},
+        "weekday_ratio": 55,
+        "peak_time": "점심/저녁 균등",
+        "age_group": "2040",
+        "characteristics": "고소득, 직장인, 유흥"
+    },
+    "홍대": {
+        "code": "1144000000",
+        "name": "서울 마포구",
+        "population": "7~9만명",
+        "sales": {"min": 3000, "max": 5000},
+        "price": {"min": 15000, "max": 25000},
+        "weekday_ratio": 45,
+        "peak_time": "저녁/야간 (유흥)",
+        "age_group": "1020",
+        "characteristics": "유흥, 트렌드, 외국인"
+    },
+    "서초": {
+        "code": "1165000000",
+        "name": "서울 서초구",
+        "population": "6~8만명",
+        "sales": {"min": 3500, "max": 6000},
+        "price": {"min": 22000, "max": 35000},
+        "weekday_ratio": 60,
+        "peak_time": "점심 (직장인)",
+        "age_group": "3040",
+        "characteristics": "고소득, 가족, 법조타운"
+    },
+    "잠실": {
+        "code": "1171000000",
+        "name": "서울 송파구",
+        "population": "7~9만명",
+        "sales": {"min": 3000, "max": 5000},
+        "price": {"min": 20000, "max": 30000},
+        "weekday_ratio": 50,
+        "peak_time": "저녁/주말 (가족)",
+        "age_group": "3040",
+        "characteristics": "가족, 쇼핑, 롯데월드"
+    },
+    "해운대": {
+        "code": "2626000000",
+        "name": "부산 해운대구",
+        "population": "5~7만명",
+        "sales": {"min": 3000, "max": 5000},
+        "price": {"min": 22000, "max": 35000},
+        "weekday_ratio": 40,
+        "peak_time": "저녁/주말 (관광)",
+        "age_group": "전연령",
+        "characteristics": "관광, 고급, 해변"
+    },
+    "서면": {
+        "code": "2617000000",
+        "name": "부산 부산진구",
+        "population": "6~8만명",
+        "sales": {"min": 2500, "max": 4000},
+        "price": {"min": 18000, "max": 25000},
+        "weekday_ratio": 55,
+        "peak_time": "점심/저녁 균등",
+        "age_group": "2030",
+        "characteristics": "부산 중심, 유흥, 쇼핑"
+    },
+    "분당": {
+        "code": "4113500000",
+        "name": "경기 성남시",
+        "population": "5~6만명",
+        "sales": {"min": 3000, "max": 5000},
+        "price": {"min": 22000, "max": 32000},
+        "weekday_ratio": 60,
+        "peak_time": "저녁 (가족)",
+        "age_group": "3050",
+        "characteristics": "고소득, 가족, IT기업"
+    },
+    "일산": {
+        "code": "4128700000",
+        "name": "경기 고양시",
+        "population": "4~5만명",
+        "sales": {"min": 2000, "max": 3500},
+        "price": {"min": 18000, "max": 25000},
+        "weekday_ratio": 55,
+        "peak_time": "저녁/주말 (가족)",
+        "age_group": "3040",
+        "characteristics": "베드타운, 가족, 호수공원"
+    },
+    "수원": {
+        "code": "4111100000",
+        "name": "경기 수원시",
+        "population": "5~6만명",
+        "sales": {"min": 2500, "max": 4000},
+        "price": {"min": 18000, "max": 25000},
+        "weekday_ratio": 60,
+        "peak_time": "점심/저녁 균등",
+        "age_group": "2040",
+        "characteristics": "삼성, 직장인, 역사"
+    },
 }
 
-CATEGORY_MAP = {
-    "맛집": "Q01", "음식점": "Q01", "카페": "Q12", "커피": "Q12",
-    "술집": "Q09", "고기": "Q01", "치킨": "Q01", "피자": "Q01",
-    "미용실": "F01", "헤어": "F01", "네일": "F02",
-    "병원": "P01", "피부과": "P01", "치과": "P01", "한의원": "P01",
+# 기본값 (지역 미특정)
+DEFAULT_REGION_DATA = {
+    "name": "전국",
+    "population": "데이터 없음",
+    "sales": {"min": 2000, "max": 3500},
+    "price": {"min": 18000, "max": 25000},
+    "weekday_ratio": 60,
+    "peak_time": "점심/저녁",
+    "age_group": "전연령",
+    "characteristics": "지역 특성 미상"
 }
 
-REGION_KEYWORDS = [
-    "서울", "인천", "부산", "대구", "대전", "광주", "울산", "세종",
-    "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
-    "강남", "홍대", "서초", "송파", "마포", "부평", "계양", "송도",
-    "해운대", "서면", "분당", "일산", "수원", "동탄", "판교"
-]
+REGION_KEYWORDS = list(REGION_DATA.keys())
 
 
 #############################################
@@ -238,68 +358,77 @@ def get_datalab_trend(keyword):
 
 
 #############################################
-# 네이버 지역검색 API
+# 네이버 지역검색 API (수정)
 #############################################
-def get_local_businesses(keyword, display=30):
+def get_local_businesses(keyword, display=10):
+    """네이버 지역검색 API - total 값 정확히 가져오기"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         return {"success": False, "error": "API 키 미설정"}
     
     url = "https://openapi.naver.com/v1/search/local.json"
-    headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
-    params = {"query": keyword, "display": display, "sort": "comment"}
+    headers = {
+        "X-Naver-Client-Id": NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
+    }
+    params = {
+        "query": keyword,
+        "display": display,
+        "sort": "comment"  # 리뷰 많은 순
+    }
     
     try:
         response = requests.get(url, headers=headers, params=params, timeout=5)
+        logger.info(f"지역검색 API 응답: {response.status_code}")
+        
         if response.status_code == 200:
             data = response.json()
-            return {"success": True, "data": data.get("items", []), "total": data.get("total", 0)}
+            total = data.get("total", 0)
+            items = data.get("items", [])
+            
+            logger.info(f"키워드: {keyword}, total: {total}, items: {len(items)}")
+            
+            return {
+                "success": True,
+                "data": items,
+                "total": total,
+                "display": data.get("display", 0)
+            }
         return {"success": False, "error": f"API 오류 ({response.status_code})"}
     except Exception as e:
+        logger.error(f"지역검색 API 오류: {str(e)}")
         return {"success": False, "error": str(e)}
 
 
 #############################################
-# 키워드에서 지역/업종 추출
+# 키워드에서 지역 추출
 #############################################
-def extract_region_and_category(keyword):
-    region = None
-    region_info = None
-    category = "맛집"
-    
-    for r, info in REGION_CODE_MAP.items():
-        if r in keyword:
-            region = r
-            region_info = info
-            break
-    
-    for cat in CATEGORY_MAP:
-        if cat in keyword:
-            category = cat
-            break
-    
-    return {"region": region, "region_info": region_info, "category": category}
+def extract_region(keyword):
+    """키워드에서 지역명 추출"""
+    for region in REGION_KEYWORDS:
+        if region in keyword:
+            return region, REGION_DATA[region]
+    return None, DEFAULT_REGION_DATA
 
 
 #############################################
 # 상권분석 통합 함수
 #############################################
 def get_commercial_analysis(keyword):
-    extracted = extract_region_and_category(keyword)
-    region = extracted["region"]
-    region_info = extracted["region_info"]
-    category = extracted["category"]
+    """키워드 기반 상권 분석"""
+    
+    # 지역 추출
+    region, region_data = extract_region(keyword)
     
     result = {
         "keyword": keyword,
         "region": region,
-        "region_info": region_info,
-        "category": category,
+        "region_data": region_data,
         "search_data": None,
         "trend_data": None,
         "local_data": None
     }
     
-    # 검색량
+    # 1. 검색량 데이터
     search_result = get_keyword_data(keyword)
     if search_result["success"]:
         kw = search_result["data"][0]
@@ -307,12 +436,14 @@ def get_commercial_analysis(keyword):
         mobile = parse_count(kw.get("monthlyMobileQcCnt"))
         total = pc + mobile
         result["search_data"] = {
-            "total": total, "mobile": mobile, "pc": pc,
+            "total": total,
+            "mobile": mobile,
+            "pc": pc,
             "mobile_ratio": (mobile * 100 // total) if total > 0 else 0,
             "comp_idx": kw.get("compIdx", "")
         }
     
-    # 트렌드
+    # 2. 트렌드 데이터
     trend_result = get_datalab_trend(keyword)
     if trend_result["success"]:
         series = trend_result["data"]
@@ -323,26 +454,30 @@ def get_commercial_analysis(keyword):
             change = ((last3 - prev3) / prev3) * 100 if prev3 > 0 else 0
         result["trend_data"] = {"series": series, "change": change}
     
-    # 지역검색
-    local_result = get_local_businesses(keyword)
+    # 3. 지역검색 데이터 (업체 수, TOP 10)
+    local_result = get_local_businesses(keyword, display=10)
     if local_result["success"]:
-        result["local_data"] = {"total": local_result["total"], "items": local_result["data"][:10]}
+        result["local_data"] = {
+            "total": local_result["total"],
+            "items": local_result["data"]
+        }
     
     return result
 
 
 #############################################
-# 상권분석 포맷팅
+# 상권분석 포맷팅 (지역별 차등 적용)
 #############################################
 def format_commercial_analysis(analysis):
+    """상권분석 결과 포맷팅 - 지역별 데이터 차등 적용"""
+    
     keyword = analysis["keyword"]
     region = analysis["region"]
-    region_info = analysis["region_info"]
-    category = analysis["category"]
+    region_data = analysis["region_data"]
     
     lines = [f"[상권분석] {keyword}", ""]
     
-    # 검색 데이터
+    # ▶ 검색 데이터
     lines.append("▶ 검색 데이터")
     if analysis["search_data"]:
         sd = analysis["search_data"]
@@ -361,112 +496,169 @@ def format_commercial_analysis(analysis):
             lines.append(f"트렌드: {trend}")
     else:
         lines.append("검색량 데이터 없음")
-    
     lines.append("")
     
-    # 지역 상권
+    # ▶ 지역 상권
     lines.append("▶ 지역 상권")
-    if region_info:
-        lines.append(f"지역: {region} ({region_info['name']})")
+    if region:
+        lines.append(f"지역: {region} ({region_data['name']})")
+        lines.append(f"특성: {region_data['characteristics']}")
     else:
         lines.append("지역: 전국 (특정 지역 미포함)")
     
+    # 업체 수 (API에서 가져온 실제 값)
     if analysis["local_data"]:
-        lines.append(f"업체 수: 약 {format_number(analysis['local_data']['total'])}개")
-    
+        total = analysis["local_data"]["total"]
+        if total > 0:
+            lines.append(f"검색 업체: 약 {format_number(total)}개")
+        else:
+            lines.append("검색 업체: 데이터 없음")
     lines.append("")
     
-    # TOP 10
+    # ▶ TOP 10 업체
     if analysis["local_data"] and analysis["local_data"]["items"]:
-        lines.append("▶ TOP 10 업체")
-        for i, item in enumerate(analysis["local_data"]["items"][:10], 1):
+        items = analysis["local_data"]["items"]
+        lines.append(f"▶ TOP {len(items)} 업체")
+        for i, item in enumerate(items, 1):
             title = re.sub(r'<[^>]+>', '', item.get("title", ""))
-            cat = item.get("category", "").split(">")[-1].strip() if item.get("category") else ""
-            lines.append(f"{i}. {title}" + (f" ({cat})" if cat else ""))
+            category = item.get("category", "")
+            # 카테고리 간략화
+            if ">" in category:
+                category = category.split(">")[-1].strip()
+            lines.append(f"{i}. {title}" + (f" ({category})" if category else ""))
         lines.append("")
     
-    # 매출 분석
+    # ▶ 매출 분석 (지역별 차등)
     lines.append("▶ 매출 분석 (업종 평균)")
-    if "맛집" in keyword or "음식" in keyword:
-        lines.append("평균매출: 월 2,500~3,500만원")
-        lines.append("결제건수: 월 1,000~1,500건")
-        lines.append("객단가: 20,000~25,000원")
-    elif "카페" in keyword:
-        lines.append("평균매출: 월 1,500~2,500만원")
-        lines.append("결제건수: 월 2,000~3,000건")
-        lines.append("객단가: 8,000~12,000원")
-    else:
-        lines.append("평균매출: 데이터 수집 중")
+    sales = region_data["sales"]
+    price = region_data["price"]
+    
+    avg_sales = (sales["min"] + sales["max"]) // 2
+    avg_price = (price["min"] + price["max"]) // 2
+    avg_count = (avg_sales * 10000) // avg_price  # 대략적인 결제 건수
+    
+    lines.append(f"평균매출: 월 {sales['min']:,}~{sales['max']:,}만원")
+    lines.append(f"결제건수: 월 {avg_count-200:,}~{avg_count+200:,}건")
+    lines.append(f"객단가: {price['min']:,}~{price['max']:,}원")
     lines.append("")
     
-    # 요일/시간대
+    # ▶ 요일/시간대 (지역별 차등)
     lines.append("▶ 요일/시간대")
-    if "맛집" in keyword or "음식" in keyword:
-        lines.append("주중 65% / 주말 35%")
-        lines.append("피크: 점심(11-14시) 35%, 저녁(17-21시) 45%")
-    elif "카페" in keyword:
-        lines.append("주중 60% / 주말 40%")
-        lines.append("피크: 오후(12-18시) 50%")
-    else:
-        lines.append("주중 60~70% / 주말 30~40%")
+    weekday = region_data["weekday_ratio"]
+    weekend = 100 - weekday
+    lines.append(f"주중 {weekday}% / 주말 {weekend}%")
+    lines.append(f"피크: {region_data['peak_time']}")
     lines.append("")
     
-    # 고객층
+    # ▶ 고객층 (검색데이터 + 지역특성 결합)
     lines.append("▶ 고객층")
-    mobile_ratio = analysis["search_data"]["mobile_ratio"] if analysis["search_data"] else 70
-    if mobile_ratio >= 85:
-        lines.append("연령: 2030 중심 (모바일 86%)")
-        lines.append("20대 35~40% / 30대 35~40%")
-    elif mobile_ratio >= 70:
-        lines.append("연령: 2040 중심")
-        lines.append("20대 25% / 30대 35% / 40대 25%")
-    else:
-        lines.append("연령: 전 연령대")
     
-    if "맛집" in keyword:
-        lines.append("성별: 여성 55~60%")
-    elif "카페" in keyword:
-        lines.append("성별: 여성 65~70%")
+    # 연령대 (모바일 비율 + 지역 특성 결합)
+    if analysis["search_data"]:
+        mobile_ratio = analysis["search_data"]["mobile_ratio"]
+        age_group = region_data["age_group"]
+        
+        if mobile_ratio >= 85:
+            lines.append(f"연령: {age_group} 중심 (모바일 {mobile_ratio}%)")
+            if "20" in age_group:
+                lines.append("20대 35~40% / 30대 35~40%")
+            elif "30" in age_group or "40" in age_group:
+                lines.append("30대 35~40% / 40대 30~35%")
+            else:
+                lines.append("20대 30% / 30대 30% / 40대 25%")
+        elif mobile_ratio >= 70:
+            lines.append(f"연령: {age_group} 중심 (모바일 {mobile_ratio}%)")
+            lines.append("20대 25% / 30대 35% / 40대 25%")
+        else:
+            lines.append(f"연령: 전 연령대 (PC 비중 높음)")
+            lines.append("30대 25% / 40대 30% / 50대 25%")
     else:
-        lines.append("성별: 균등")
+        lines.append(f"연령: {region_data['age_group']}")
+    
+    # 성별 (업종에 따라)
+    if "카페" in keyword or "디저트" in keyword or "브런치" in keyword:
+        lines.append("성별: 여성 65~70%")
+    elif "고기" in keyword or "삼겹살" in keyword or "갈비" in keyword:
+        lines.append("성별: 남성 55~60%")
+    else:
+        lines.append("성별: 여성 52~55%")
     lines.append("")
     
-    # 유동인구
+    # ▶ 유동인구 (지역별)
     lines.append("▶ 유동인구")
-    pop_map = {"강남": "8~10만명", "홍대": "7~9만명", "부평": "4~5만명", "해운대": "5~7만명", "서면": "6~8만명"}
-    pop = pop_map.get(region, "3~5만명")
-    lines.append(f"일평균: 약 {pop}")
+    lines.append(f"일평균: 약 {region_data['population']}")
     lines.append("피크: 금/토요일, 점심/저녁")
     lines.append("")
     
-    # 인사이트
+    # ▶ 마케팅 인사이트 (데이터 기반 동적 생성)
     lines.append("▶ 마케팅 인사이트")
-    insights = []
-    if analysis["search_data"]:
-        total = analysis["search_data"]["total"]
-        if total >= 50000:
-            insights.append("• 검색량 多 → 플레이스 최적화 필수")
-        elif total >= 10000:
-            insights.append("• 검색량 중간 → SEO+광고 병행")
-        else:
-            insights.append("• 검색량 少 → 롱테일 공략")
-    
-    if analysis["trend_data"] and analysis["trend_data"]["change"] <= -10:
-        insights.append("• 하락 트렌드 → 차별화 필요")
-    
-    if analysis["local_data"] and analysis["local_data"]["total"] >= 1000:
-        insights.append("• 경쟁 치열 → 리뷰/별점 관리")
-    
-    if "맛집" in keyword:
-        insights.append("• 블로그 체험단 효과적")
-        insights.append("• 플레이스 리뷰 확보 중요")
-    
-    if not insights:
-        insights.append("• 데이터 추가 수집 필요")
-    
-    lines.extend(insights[:5])
+    insights = generate_insights(analysis, region_data)
+    lines.extend(insights)
     
     return "\n".join(lines)
+
+
+def generate_insights(analysis, region_data):
+    """데이터 기반 인사이트 동적 생성"""
+    insights = []
+    
+    # 검색량 기반
+    if analysis["search_data"]:
+        total = analysis["search_data"]["total"]
+        mobile_ratio = analysis["search_data"]["mobile_ratio"]
+        
+        if total >= 100000:
+            insights.append("• 검색량 매우 많음 → 플레이스 최적화 필수")
+        elif total >= 50000:
+            insights.append("• 검색량 많음 → SEO + 광고 병행 권장")
+        elif total >= 10000:
+            insights.append("• 검색량 중간 → 틈새 공략 가능")
+        else:
+            insights.append("• 검색량 적음 → 롱테일 키워드 활용")
+        
+        if mobile_ratio >= 85:
+            insights.append("• 모바일 집중 → 모바일 최적화 필수")
+    
+    # 트렌드 기반
+    if analysis["trend_data"]:
+        change = analysis["trend_data"]["change"]
+        if change >= 15:
+            insights.append("• 급상승 트렌드 → 지금이 진입 적기!")
+        elif change <= -15:
+            insights.append("• 하락 트렌드 → 차별화/리브랜딩 필요")
+        elif -5 <= change <= 5:
+            insights.append("• 안정적 수요 → 꾸준한 운영 적합")
+    
+    # 경쟁 기반
+    if analysis["local_data"]:
+        total = analysis["local_data"]["total"]
+        if total >= 5000:
+            insights.append("• 경쟁 매우 치열 → 리뷰 관리 필수")
+        elif total >= 1000:
+            insights.append("• 경쟁 치열 → 차별화 포인트 필요")
+        elif total >= 300:
+            insights.append("• 경쟁 적당 → 품질로 승부 가능")
+        else:
+            insights.append("• 경쟁 낮음 → 선점 효과 기대")
+    
+    # 지역 특성 기반
+    if region_data.get("characteristics"):
+        char = region_data["characteristics"]
+        if "직장인" in char:
+            insights.append("• 점심 특선/런치 메뉴 효과적")
+        if "가족" in char:
+            insights.append("• 가족 단위 메뉴/좌석 준비")
+        if "유흥" in char or "데이트" in char:
+            insights.append("• 분위기/인테리어 중요")
+        if "관광" in char:
+            insights.append("• 외국어 메뉴/결제 준비")
+    
+    # 기본 인사이트
+    if len(insights) < 3:
+        insights.append("• 블로그 체험단 효과적")
+        insights.append("• 네이버 플레이스 리뷰 확보")
+    
+    return insights[:6]  # 최대 6개
 
 #############################################
 # 기능 1: 검색량 조회 (깔끔한 다중 키워드)
@@ -603,7 +795,7 @@ def get_ad_cost(keyword):
         mobile_estimates = mobile_perf["data"].get("estimate", [])
         analysis = get_optimal_bid_analysis(mobile_estimates)
         
-        if analysis and analysis['all_estimates']:
+        if analysis and analysis.get('all_estimates'):
             has_ad_data = True
             response += "▶ 모바일 입찰가별 성과\n"
             
@@ -973,11 +1165,43 @@ def get_help():
 
 
 #############################################
-# 라우트
+# 테스트 라우트 (디버깅용)
 #############################################
 @app.route('/')
 def home():
     return "서버 정상 작동 중"
+
+
+@app.route('/test-local')
+def test_local():
+    """지역검색 API 테스트"""
+    keyword = request.args.get('q', '부평맛집')
+    
+    result = get_local_businesses(keyword, display=10)
+    
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>지역검색 테스트</title></head>
+<body>
+<h2>키워드: {keyword}</h2>
+<h3>API 결과</h3>
+<p><b>성공:</b> {result.get('success')}</p>
+<p><b>total:</b> {result.get('total', 'N/A')}</p>
+<p><b>items 개수:</b> {len(result.get('data', []))}</p>
+"""
+    
+    if result.get('success') and result.get('data'):
+        html += "<h3>상위 업체</h3><ol>"
+        for item in result['data']:
+            title = re.sub(r'<[^>]+>', '', item.get('title', ''))
+            category = item.get('category', '')
+            html += f"<li>{title} ({category})</li>"
+        html += "</ol>"
+    
+    if result.get('error'):
+        html += f"<p style='color:red'>오류: {result['error']}</p>"
+    
+    html += "</body></html>"
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
 @app.route('/test-place')
