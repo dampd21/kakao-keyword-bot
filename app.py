@@ -71,7 +71,7 @@ def get_comp_text(comp):
         return "[낮음]"
 
 def is_guide_message(text):
-    guide_indicators = ["사용 가이드", "키워드 검색량", "연관 검색어", "CPC 광고", "블로그 상위글", "자동완성어", "대표키워드", "재미 기능"]
+    guide_indicators = ["사용 가이드", "키워드 검색량", "연관 검색어", "CPC 광고", "자동완성어", "대표키워드", "재미 기능"]
     count = sum(1 for indicator in guide_indicators if indicator in text)
     return count >= 4
 
@@ -322,43 +322,56 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-def get_optimal_bid_analysis(estimates):
-    if not estimates:
-        return None
-    valid_estimates = [e for e in estimates if e.get('clicks', 0) > 0]
-    if not valid_estimates:
-        return None
+
+#############################################
+# 순위별 입찰가 조회 API
+#############################################
+def get_position_bids(keyword):
+    """순위별 입찰가 조회 (1~5위)"""
     
-    efficiency_data = []
-    for i in range(1, len(valid_estimates)):
-        prev, curr = valid_estimates[i-1], valid_estimates[i]
-        click_inc = curr.get('clicks', 0) - prev.get('clicks', 0)
-        cost_inc = curr.get('cost', 0) - prev.get('cost', 0)
-        if cost_inc > 0 and click_inc > 0:
-            efficiency_data.append({'data': curr, 'cost_per_click': cost_inc / click_inc})
+    try:
+        uri = '/estimate/average-position-bid'
+        url = f'https://api.searchad.naver.com{uri}'
+        headers = get_naver_api_headers('POST', uri)
+        
+        positions = [1, 2, 3, 4, 5]
+        
+        # PC 입찰가
+        payload_pc = {
+            "device": "PC",
+            "keywordplus": False,
+            "key": keyword,
+            "positions": positions
+        }
+        response_pc = requests.post(url, headers=headers, json=payload_pc, timeout=5)
+        
+        # 모바일 입찰가
+        payload_mobile = {
+            "device": "MOBILE",
+            "keywordplus": False,
+            "key": keyword,
+            "positions": positions
+        }
+        response_mobile = requests.post(url, headers=headers, json=payload_mobile, timeout=5)
+        
+        if response_pc.status_code == 200 and response_mobile.status_code == 200:
+            pc_data = response_pc.json().get("estimate", [])
+            mobile_data = response_mobile.json().get("estimate", [])
+            
+            # 순위별로 정리
+            pc_bids = {item.get("position"): item.get("bid", 0) for item in pc_data}
+            mobile_bids = {item.get("position"): item.get("bid", 0) for item in mobile_data}
+            
+            return {
+                "success": True,
+                "pc": pc_bids,
+                "mobile": mobile_bids
+            }
+        
+        return {"success": False, "error": f"API 오류"}
     
-    best_efficiency = None
-    for i, eff in enumerate(efficiency_data):
-        if i + 1 < len(efficiency_data):
-            next_eff = efficiency_data[i + 1]
-            if next_eff['cost_per_click'] / eff['cost_per_click'] >= 2:
-                best_efficiency = eff
-                break
-        else:
-            best_efficiency = eff
-    
-    if not best_efficiency and valid_estimates:
-        best_efficiency = {'data': valid_estimates[len(valid_estimates)//2], 'cost_per_click': None}
-    
-    max_effective_bid = None
-    if valid_estimates:
-        max_clicks = valid_estimates[-1].get('clicks', 0)
-        for est in valid_estimates:
-            if est.get('clicks', 0) == max_clicks:
-                max_effective_bid = est.get('bid', 0)
-                break
-    
-    return {'best_efficiency': best_efficiency, 'max_effective_bid': max_effective_bid, 'all_estimates': valid_estimates}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 #############################################
@@ -970,7 +983,7 @@ def get_related_keywords_api(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가
+# 기능 3: 광고 단가 (통합 버전)
 #############################################
 def get_ad_cost(keyword):
     result = get_keyword_data(keyword)
@@ -984,121 +997,119 @@ def get_ad_cost(keyword):
     total_qc = pc_qc + mobile_qc
     mobile_ratio = (mobile_qc * 100 // total_qc) if total_qc > 0 else 0
     
-    response = f"""[광고분석] {keyword_name}
-
-▶ 키워드 정보
-월간 검색량: {format_number(total_qc)}회
-모바일 {mobile_ratio}% / PC {100-mobile_ratio}%
-
-"""
+    lines = [f"[광고분석] {keyword_name}", ""]
     
+    # ▶ 키워드 정보
+    lines.append("▶ 키워드 정보")
+    lines.append(f"월간 검색량: {format_number(total_qc)}회")
+    lines.append(f"모바일 {mobile_ratio}% / PC {100-mobile_ratio}%")
+    lines.append("")
+    
+    # ▶ 순위별 입찰가
+    position_result = get_position_bids(keyword_name)
+    if position_result["success"]:
+        pc_bids = position_result["pc"]
+        mobile_bids = position_result["mobile"]
+        
+        lines.append("▶ 순위별 입찰가")
+        lines.append("      PC      모바일")
+        for pos in [1, 2, 3, 4, 5]:
+            pc_bid = pc_bids.get(pos, 0)
+            mobile_bid = mobile_bids.get(pos, 0)
+            lines.append(f"{pos}위  {format_number(pc_bid):>6}원  {format_number(mobile_bid):>6}원")
+        lines.append("")
+        
+        # 1위 모바일 입찰가 저장 (추천 전략용)
+        top1_mobile = mobile_bids.get(1, 0)
+    else:
+        top1_mobile = None
+    
+    # ▶ 예상 성과 (모바일)
     test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
     mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
     
-    has_ad_data = False
-    analysis = None
+    efficient_bid = None
+    efficient_clicks = 0
+    efficient_cost = 0
+    max_clicks_bid = None
     
     if mobile_perf.get("success"):
         mobile_estimates = mobile_perf["data"].get("estimate", [])
-        analysis = get_optimal_bid_analysis(mobile_estimates)
+        valid_estimates = [e for e in mobile_estimates if e.get('clicks', 0) > 0]
         
-        if analysis and analysis.get('all_estimates'):
-            has_ad_data = True
-            response += "▶ 모바일 입찰가별 성과\n"
+        if valid_estimates:
+            lines.append("▶ 예상 성과 (모바일)")
             
-            prev_clicks = 0
-            for est in analysis['all_estimates'][:6]:
+            prev_clicks = -1
+            shown_count = 0
+            max_clicks = 0
+            max_clicks_bid = 0
+            
+            for est in valid_estimates:
                 bid = est.get("bid", 0)
                 clicks = est.get("clicks", 0)
                 cost = est.get("cost", 0)
-                response += f"{format_number(bid)}원 → 월 {clicks}회 / {format_won(cost)}\n"
-                if clicks == prev_clicks and prev_clicks > 0:
-                    break
+                
+                # 최대 클릭 업데이트
+                if clicks > max_clicks:
+                    max_clicks = clicks
+                    max_clicks_bid = bid
+                
+                # 효율 입찰가 (클릭 대비 비용 효율이 좋은 구간)
+                if efficient_bid is None and clicks > 0:
+                    if prev_clicks >= 0 and clicks > prev_clicks:
+                        efficient_bid = bid
+                        efficient_clicks = clicks
+                        efficient_cost = cost
+                
+                # 최소 5개 표시
+                if shown_count < 5:
+                    lines.append(f"{format_number(bid)}원 → 월 {clicks}클릭 / {format_won(cost)}")
+                    shown_count += 1
+                elif clicks > prev_clicks:
+                    lines.append(f"{format_number(bid)}원 → 월 {clicks}클릭 / {format_won(cost)}")
+                    shown_count += 1
+                
                 prev_clicks = clicks
             
-            response += "\n"
+            # 클릭 증가 없는 구간 표시
+            if max_clicks_bid and max_clicks_bid < 10000:
+                lines.append(f"※ {format_number(max_clicks_bid)}원 이상 클릭 증가 없음")
             
-            if analysis.get('best_efficiency'):
-                eff = analysis['best_efficiency']['data']
-                eff_bid = eff.get('bid', 0)
-                eff_clicks = eff.get('clicks', 0)
-                eff_cost = eff.get('cost', 0)
-                eff_cpc = int(eff_cost / eff_clicks) if eff_clicks > 0 else eff_bid
-                
-                response += f"""▶ 추천 입찰가
-{format_number(eff_bid)}원
-ㄴ 예상 클릭: 월 {eff_clicks}회
-ㄴ 예상 비용: {format_won(eff_cost)}
-ㄴ 클릭당: {format_number(eff_cpc)}원
-
-▶ 운영 가이드
-시작 입찰가: {format_number(eff_bid)}원
-일 예산: {format_won(max(eff_cost/30, 10000))}
-CTR 목표: 1.5% 이상"""
-    
-    if not has_ad_data:
-        response += f"""▶ 광고 정보
-검색량이 적어 예상 데이터가 없습니다.
-
-가이드:
-- 입찰가: 100~500원 시작
-- 일 예산: 5,000~10,000원
-- 1-2주 운영 후 조정"""
-    
-    return response
-
-
-#############################################
-# 기능 4: 블로그 상위글
-#############################################
-def get_blog_titles(keyword):
-    try:
-        url = f"https://search.naver.com/search.naver?where=blog&query={requests.utils.quote(keyword)}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept-Language": "ko-KR,ko;q=0.9"}
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            titles = []
-            pattern = re.findall(r'sds-comps-text-type-headline1[^>]*>(.*?)</span>', response.text, re.DOTALL)
-            for match in pattern:
-                title = re.sub(r'<[^>]+>', '', match).strip()
-                if title and len(title) > 3 and title not in titles:
-                    titles.append(title)
-                    if len(titles) >= 5:
-                        break
+            lines.append("")
             
-            if titles:
-                result = f"[블로그] {keyword} 상위 5개\n\n"
-                for i, title in enumerate(titles, 1):
-                    result += f"{i}. {title}\n"
-                return result.strip()
+            # 효율 입찰가 보정
+            if efficient_bid is None and valid_estimates:
+                mid_idx = len(valid_estimates) // 2
+                efficient_bid = valid_estimates[mid_idx].get("bid", 0)
+                efficient_clicks = valid_estimates[mid_idx].get("clicks", 0)
+                efficient_cost = valid_estimates[mid_idx].get("cost", 0)
+    
+    # ▶ 추천 전략
+    lines.append("▶ 추천 전략")
+    
+    if top1_mobile:
+        lines.append(f"• 1위 목표: {format_number(top1_mobile)}원 이상 입찰")
+    
+    if efficient_bid:
+        lines.append(f"• 효율 입찰: {format_number(efficient_bid)}원 (월 {efficient_clicks}클릭)")
         
-        return get_blog_titles_api(keyword)
-    except:
-        return get_blog_titles_api(keyword)
-
-
-def get_blog_titles_api(keyword):
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        return f"[블로그] {keyword}\n\n블로그 API 미설정"
+        # 시작가 추천 (효율 입찰가의 50~70%)
+        start_min = int(efficient_bid * 0.5)
+        start_max = int(efficient_bid * 0.7)
+        start_min = max(start_min, 100)  # 최소 100원
+        lines.append(f"• 시작가: {format_number(start_min)}~{format_number(start_max)}원 권장")
+        
+        # 일 예산 (월 비용 / 30)
+        daily_budget = max(efficient_cost / 30, 10000)
+        lines.append(f"• 일 예산: {format_won(daily_budget)}")
+    else:
+        lines.append("• 시작가: 100~500원")
+        lines.append("• 일 예산: 5,000~10,000원")
     
-    url = "https://openapi.naver.com/v1/search/blog.json"
-    headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
-    params = {"query": keyword, "display": 5, "sort": "sim"}
+    lines.append("• 예상 CTR: 모바일 2.3% / PC 1.1%")
     
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=5)
-        if response.status_code == 200:
-            items = response.json().get("items", [])
-            if items:
-                result = f"[블로그] {keyword} 상위 5개\n\n"
-                for i, item in enumerate(items, 1):
-                    title = item.get("title", "").replace("<b>", "").replace("</b>", "")
-                    result += f"{i}. {title}\n"
-                return result.strip()
-        return f"'{keyword}' 블로그 검색 결과가 없습니다."
-    except Exception as e:
-        return f"블로그 검색 실패: {str(e)}"
+    return "\n".join(lines)
 
 
 #############################################
@@ -1342,31 +1353,36 @@ def get_help():
     return """[사용 가이드]
 
 ▶ 키워드 검색량 (최대 5개)
-예) 인천맛집
-예) 인천맛집,강남맛집,서울맛집
+방법) 키워드1, 키워드2, 키워드3, 키워드4, 키워드5
+예) 인천맛집,강남맛집,서울맛집,부산맛집,전주맛집
 
-▶ 상권분석 (트렌드+매출+광고전략)
-예) 상권 부평맛집
-예) 상권 강남카페
+▶ 상권분석 (트렌드+매출+고객)
+방법) 상권+키워드
+예) 상권 강남맛집
 
 ▶ 연관 검색어
+방법) 연관+키워드
 예) 연관 인천맛집
 
-▶ CPC 광고 단가
-예) 광고 인천맛집
-
-▶ 블로그 상위글
-예) 블로그 인천맛집
-
 ▶ 자동완성어
+방법) 자동+키워드
 예) 자동 인천맛집
 
-▶ 대표키워드
+▶ CPC 파워링크 광고 단가
+방법) 광고+키워드
+예) 광고 인천맛집
+
+▶ 대표 키워드
+방법) 대표+플레이스ID
+방법) 대표+플레이스 주소
 예) 대표 12345678
+예) 대표 m.place.naver.com/restaurant/1309812619/home
 
 ▶ 재미 기능
 운세 → 운세 870114
-로또 → 로또"""
+로또 → 로또
+
+기능 추가를 원하시면 소식에 댓글 남겨주세요."""
 
 
 #############################################
@@ -1428,6 +1444,22 @@ def test_place():
     else:
         html += f"<p>{result.get('error')}</p>"
     
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+@app.route('/test-ad')
+def test_ad():
+    """광고 분석 테스트"""
+    keyword = request.args.get('q', '부평맛집')
+    result = get_ad_cost(keyword)
+    
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>광고분석 테스트</title></head>
+<body>
+<h2>키워드: {keyword}</h2>
+<h3>글자 수: {len(result)}자</h3>
+<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
+</body></html>"""
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
@@ -1506,14 +1538,6 @@ def kakao_skill():
             if keyword:
                 return create_kakao_response(get_ad_cost(keyword))
             return create_kakao_response("예) 광고 맛집")
-        
-        # 블로그
-        if lower_input.startswith("블로그 "):
-            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
-            keyword = clean_keyword(keyword)
-            if keyword:
-                return create_kakao_response(get_blog_titles(keyword))
-            return create_kakao_response("예) 블로그 맛집")
         
         # 기본: 검색량
         keyword = user_utterance.strip()
