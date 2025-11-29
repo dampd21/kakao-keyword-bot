@@ -327,7 +327,7 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
 # 순위별 입찰가 조회 API
 #############################################
 def get_position_bids(keyword):
-    """순위별 입찰가 조회 (1~5위)"""
+    """순위별 입찰가 조회 (1~5위) - 디버깅 버전"""
     
     try:
         uri = '/estimate/average-position-bid'
@@ -343,7 +343,11 @@ def get_position_bids(keyword):
             "key": keyword,
             "positions": positions
         }
-        response_pc = requests.post(url, headers=headers, json=payload_pc, timeout=5)
+        
+        logger.info(f"[디버그] PC 입찰가 요청: {keyword}")
+        response_pc = requests.post(url, headers=headers, json=payload_pc, timeout=10)
+        logger.info(f"[디버그] PC 응답 코드: {response_pc.status_code}")
+        logger.info(f"[디버그] PC 응답 본문: {response_pc.text[:500]}")
         
         # 모바일 입찰가
         payload_mobile = {
@@ -352,15 +356,25 @@ def get_position_bids(keyword):
             "key": keyword,
             "positions": positions
         }
-        response_mobile = requests.post(url, headers=headers, json=payload_mobile, timeout=5)
+        
+        logger.info(f"[디버그] 모바일 입찰가 요청: {keyword}")
+        response_mobile = requests.post(url, headers=headers, json=payload_mobile, timeout=10)
+        logger.info(f"[디버그] 모바일 응답 코드: {response_mobile.status_code}")
+        logger.info(f"[디버그] 모바일 응답 본문: {response_mobile.text[:500]}")
         
         if response_pc.status_code == 200 and response_mobile.status_code == 200:
             pc_data = response_pc.json().get("estimate", [])
             mobile_data = response_mobile.json().get("estimate", [])
             
+            logger.info(f"[디버그] PC 데이터: {pc_data}")
+            logger.info(f"[디버그] 모바일 데이터: {mobile_data}")
+            
             # 순위별로 정리
             pc_bids = {item.get("position"): item.get("bid", 0) for item in pc_data}
             mobile_bids = {item.get("position"): item.get("bid", 0) for item in mobile_data}
+            
+            logger.info(f"[디버그] 정리된 PC: {pc_bids}")
+            logger.info(f"[디버그] 정리된 모바일: {mobile_bids}")
             
             return {
                 "success": True,
@@ -368,9 +382,12 @@ def get_position_bids(keyword):
                 "mobile": mobile_bids
             }
         
-        return {"success": False, "error": f"API 오류"}
+        error_msg = f"PC={response_pc.status_code}, Mobile={response_mobile.status_code}"
+        logger.error(f"[디버그] API 오류: {error_msg}")
+        return {"success": False, "error": error_msg}
     
     except Exception as e:
+        logger.error(f"[디버그] 예외 발생: {str(e)}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 
@@ -1006,7 +1023,9 @@ def get_ad_cost(keyword):
     lines.append("")
     
     # ▶ 순위별 입찰가
+    logger.info(f"순위별 입찰가 조회 시작: {keyword_name}")
     position_result = get_position_bids(keyword_name)
+    
     if position_result["success"]:
         pc_bids = position_result["pc"]
         mobile_bids = position_result["mobile"]
@@ -1019,10 +1038,16 @@ def get_ad_cost(keyword):
             lines.append(f"{pos}위  {format_number(pc_bid):>6}원  {format_number(mobile_bid):>6}원")
         lines.append("")
         
-        # 1위 모바일 입찰가 저장 (추천 전략용)
         top1_mobile = mobile_bids.get(1, 0)
     else:
+        # ❌ 실패 처리 추가
+        logger.error(f"순위별 입찰가 조회 실패: {position_result.get('error')}")
+        lines.append("▶ 순위별 입찰가")
+        lines.append(f"※ 조회 실패: {position_result.get('error', '알 수 없는 오류')}")
+        lines.append("(아래 예상 성과 참고)")
+        lines.append("")
         top1_mobile = None
+
     
     # ▶ 예상 성과 (모바일)
     test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
@@ -1460,6 +1485,71 @@ def test_ad():
 <h3>글자 수: {len(result)}자</h3>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
 </body></html>"""
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+@app.route('/test-position')
+def test_position():
+    """순위별 입찰가 디버깅"""
+    keyword = request.args.get('q', '강남맛집')
+    
+    logger.info(f"========== 순위별 입찰가 테스트 시작: {keyword} ==========")
+    result = get_position_bids(keyword)
+    logger.info(f"========== 테스트 종료 ==========")
+    
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>순위별 입찰가 디버깅</title></head>
+<body style="font-family: monospace; padding: 20px;">
+<h2>키워드: {keyword}</h2>
+<h3 style="color: {'green' if result.get('success') else 'red'}">
+    {'✅ 성공' if result.get('success') else '❌ 실패'}
+</h3>
+
+<div style="background: #f5f5f5; padding: 15px; margin: 10px 0;">
+    <h4>원본 응답:</h4>
+    <pre>{json.dumps(result, ensure_ascii=False, indent=2)}</pre>
+</div>
+"""
+    
+    if result.get('success'):
+        html += """
+<table border="1" cellpadding="10" style="margin-top: 20px; border-collapse: collapse;">
+    <tr style="background: #4CAF50; color: white;">
+        <th>순위</th>
+        <th>PC 입찰가</th>
+        <th>모바일 입찰가</th>
+    </tr>
+"""
+        for pos in [1, 2, 3, 4, 5]:
+            pc_bid = result['pc'].get(pos, 0)
+            mobile_bid = result['mobile'].get(pos, 0)
+            html += f"""
+    <tr>
+        <td style="text-align: center;">{pos}위</td>
+        <td style="text-align: right;">{format_number(pc_bid)}원</td>
+        <td style="text-align: right;">{format_number(mobile_bid)}원</td>
+    </tr>
+"""
+        html += "</table>"
+    else:
+        html += f"""
+<div style="background: #ffebee; padding: 15px; margin: 10px 0; color: #c62828;">
+    <h4>오류 메시지:</h4>
+    <p>{result.get('error', '알 수 없는 오류')}</p>
+</div>
+"""
+    
+    html += """
+<div style="margin-top: 30px; padding: 15px; background: #e3f2fd;">
+    <h4>로그 확인 방법:</h4>
+    <p>서버 콘솔에서 <code>[디버그]</code> 메시지를 확인하세요.</p>
+    <ul>
+        <li>요청 URL 확인</li>
+        <li>응답 코드 확인 (200이어야 함)</li>
+        <li>응답 본문 확인</li>
+    </ul>
+</div>
+</body></html>"""
+    
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
