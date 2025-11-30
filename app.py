@@ -996,16 +996,12 @@ def get_ad_cost(keyword):
         lines.append("───────────────")
         
         today = date.today()
-        if today.month == 1:
-            start_date = date(today.year - 1, 12, 1)
-            end_date = date(today.year, 1, 1)
-        else:
-            start_date = date(today.year, today.month - 1, 1)
-            end_date = date(today.year, today.month, 1)
-        
+        start_date = today - timedelta(days=30)
+        end_date = today
+
         lines.append(f"통계 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
         lines.append("")
-        
+
         top1_mobile = mobile_bids.get(1, 0)
     else:
         logger.error(f"순위별 입찰가 조회 실패: {position_result.get('error')}")
