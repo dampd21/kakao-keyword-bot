@@ -92,6 +92,36 @@ def is_guide_message(text):
     count = sum(1 for indicator in guide_indicators if indicator in text)
     return count >= 4
 
+def extract_place_id_from_url(text):
+    """URL 또는 텍스트에서 플레이스 ID 추출"""
+    text = str(text).strip()
+    
+    # 숫자만 있으면 그대로 반환
+    if text.isdigit():
+        return text
+    
+    # URL에서 ID 추출 패턴들
+    patterns = [
+        r'/restaurant/(\d+)',
+        r'/place/(\d+)',
+        r'/cafe/(\d+)',
+        r'/hospital/(\d+)',
+        r'/beauty/(\d+)',
+        r'[?&]id=(\d+)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    
+    # 순수 숫자 추출
+    numbers = re.findall(r'\d{8,}', text)
+    if numbers:
+        return numbers[0]
+    
+    return None
+
 
 #############################################
 # 지역별 상권 특성 데이터
@@ -437,7 +467,6 @@ def get_datalab_trend(keyword, retry=2):
                 time.sleep(0.5)
                 continue
             return {"success": False, "error": str(e)}
-
 
 #############################################
 # 네이버 플레이스 리뷰 수집
@@ -850,6 +879,7 @@ def generate_insights_v2(analysis, region_data, comp_level=2):
         insights.append("• 경쟁 낮음 → 선점 효과, 빠른 리뷰 확보 유리")
     
     return insights[:5]
+
 
 #############################################
 # 기능 1: 검색량 조회
@@ -1317,6 +1347,7 @@ def get_lotto_fallback():
     result += "\n행운을 빕니다!\n※ 재미로만 즐기세요!"
     return result
 
+
 #############################################
 # 기능: 플레이스 상세 정보 (저장+리뷰+대표키워드 통합)
 #############################################
@@ -1457,6 +1488,46 @@ def format_place_detail(input_str):
     return "\n".join(lines)
 
 
+def format_place_keywords(input_str):
+    """플레이스 대표키워드만 조회"""
+    
+    extracted_id = extract_place_id_from_url(str(input_str).strip())
+    
+    if not extracted_id:
+        return """[대표키워드] 조회 실패
+
+플레이스 ID를 찾을 수 없습니다.
+
+사용법:
+대표 1234567890"""
+    
+    result = get_place_detail(extracted_id)
+    
+    if not result["success"]:
+        return f"""[대표키워드] 조회 실패
+
+플레이스 ID: {extracted_id}
+정보를 가져올 수 없습니다."""
+    
+    lines = ["[대표키워드]", ""]
+    
+    if result["name"]:
+        lines.append(f"업체명: {result['name']}")
+    lines.append(f"플레이스ID: {extracted_id}")
+    lines.append("")
+    
+    if result["keywords"]:
+        lines.append("▶ 대표키워드")
+        for i, kw in enumerate(result["keywords"], 1):
+            lines.append(f"{i}. {kw}")
+        lines.append("")
+        lines.append(f"복사용: {', '.join(result['keywords'])}")
+    else:
+        lines.append("▶ 대표키워드: 없음")
+    
+    return "\n".join(lines)
+
+
 #############################################
 # 기능 8: 네이버 자동완성
 #############################################
@@ -1539,7 +1610,6 @@ def get_youtube_autocomplete(keyword):
     except Exception as e:
         logger.error(f"유튜브 자동완성 오류: {str(e)}")
         return f"[유튜브 자동완성] {keyword}\n\n조회 실패: {str(e)}"
-
 
 
 #############################################
@@ -1631,13 +1701,13 @@ def test_commercial():
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
-@app.route('/test-place-info')
-def test_place_info():
+@app.route('/test-place-detail')
+def test_place_detail():
     place_id = request.args.get('id', '1309812619')
-    result = format_place_info(place_id)
+    result = format_place_detail(place_id)
     
     html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>플레이스 정보 테스트</title></head>
+<html><head><meta charset="UTF-8"><title>플레이스 상세 테스트</title></head>
 <body>
 <h2>플레이스 ID: {place_id}</h2>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
@@ -1674,24 +1744,8 @@ def test_youtube():
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
-@app.route('/test-ranking')
-def test_ranking():
-    keyword = request.args.get('q', '부평맛집')
-    place_id = request.args.get('id', '1234567890')
-    result = get_place_ranking(keyword, place_id)
-    
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>플레이스 순위 테스트</title></head>
-<body>
-<h2>키워드: {keyword}</h2>
-<h3>플레이스 ID: {place_id}</h3>
-<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
-</body></html>"""
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
-
 #############################################
-# 카카오 스킬
+# 카카오 스킬 (수정됨)
 #############################################
 @app.route('/skill', methods=['POST'])
 def kakao_skill():
@@ -1727,8 +1781,22 @@ def kakao_skill():
         if lower_input in ["로또", "로또번호", "lotto"]:
             return create_kakao_response(get_lotto())
         
-        # 상권분석
-        if any(lower_input.startswith(cmd) for cmd in ["상권 ", "상세 ", "인사이트 ", "트렌드 "]):
+        # ✅ 플레이스 상세 (저장+리뷰+대표키워드 통합) - 우선 처리
+        if lower_input.startswith("상세 "):
+            input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            if input_text:
+                return create_kakao_response(format_place_detail(input_text))
+            return create_kakao_response("예) 상세 1234567890\n예) 상세 place.naver.com/restaurant/12345")
+        
+        # ✅ 대표키워드만 조회
+        if lower_input.startswith("대표 ") or lower_input.startswith("대표키워드 "):
+            input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            if input_text:
+                return create_kakao_response(format_place_keywords(input_text))
+            return create_kakao_response("예) 대표 37838432")
+        
+        # ✅ 상권분석 ("상세" 제거됨)
+        if any(lower_input.startswith(cmd) for cmd in ["상권 ", "인사이트 ", "트렌드 "]):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
             if keyword:
@@ -1736,7 +1804,7 @@ def kakao_skill():
                 return create_kakao_response(format_commercial_analysis(analysis))
             return create_kakao_response("예) 상권 부평맛집")
         
-        # 유튜브 자동완성 (신규)
+        # 유튜브 자동완성
         if lower_input.startswith("유튜브 ") or lower_input.startswith("yt "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
@@ -1749,13 +1817,6 @@ def kakao_skill():
             if keyword:
                 return create_kakao_response(get_autocomplete(keyword))
             return create_kakao_response("예) 자동 부평맛집")
-       
-        # 대표키워드
-        if lower_input.startswith("대표 ") or lower_input.startswith("대표키워드 "):
-            input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
-            if input_text:
-                return create_kakao_response(format_place_keywords(input_text))
-            return create_kakao_response("예) 대표 37838432")
         
         # 연관 키워드
         if lower_input.startswith("연관 "):
@@ -1779,13 +1840,6 @@ def kakao_skill():
             return create_kakao_response(get_search_volume(keyword))
         else:
             return create_kakao_response(get_search_volume(clean_keyword(keyword)))
-
-        # 플레이스 상세 (저장+리뷰+대표키워드 통합)
-        if lower_input.startswith("상세 "):
-            input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
-            if input_text:
-                return create_kakao_response(format_place_detail(input_text))
-            return create_kakao_response("예) 상세 1234567890\n예) 상세 place.naver.com/restaurant/12345")
     
     except Exception as e:
         logger.error(f"스킬 오류: {str(e)}")
@@ -1824,4 +1878,3 @@ if __name__ == '__main__':
     
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
