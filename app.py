@@ -1364,7 +1364,10 @@ def get_place_detail(place_id):
         "save_count": 0,
         "review_count": 0,
         "blog_count": 0,
-        "keywords": []
+        "visitor_score": 0,
+        "keywords": [],
+        "conveniences": [],
+        "micro_review": ""
     }
     
     # 여러 카테고리로 시도
@@ -1374,19 +1377,12 @@ def get_place_detail(place_id):
             
             headers = {
                 "User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                 "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
                 "Accept-Encoding": "gzip, deflate, br",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Upgrade-Insecure-Requests": "1"
             }
             
-            session = requests.Session()
-            response = session.get(url, headers=headers, timeout=15, allow_redirects=True)
+            response = requests.get(url, headers=headers, timeout=15)
             
             if response.status_code != 200:
                 continue
@@ -1397,13 +1393,11 @@ def get_place_detail(place_id):
             except:
                 html = response.text
             
-            # 페이지가 유효한지 확인 (리다이렉트되거나 404 페이지인 경우 스킵)
+            # 페이지 유효성 확인
             if '존재하지 않는' in html or '페이지를 찾을 수 없' in html:
                 continue
             
-            logger.info(f"📄 {category} 페이지 로드 성공, 길이: {len(html)}")
-            
-            # ✅ 방법 1: window.__APOLLO_STATE__ 에서 추출
+            # ✅ APOLLO_STATE에서 추출 (이 구조가 확인됨)
             apollo_match = re.search(
                 r'window\.__APOLLO_STATE__\s*=\s*(\{.+?\});?\s*</script>',
                 html, re.DOTALL
@@ -1411,235 +1405,140 @@ def get_place_detail(place_id):
             
             if apollo_match:
                 try:
-                    apollo_text = apollo_match.group(1)
-                    # JSON 파싱 전 이스케이프 처리
-                    apollo_data = json.loads(apollo_text)
+                    apollo_data = json.loads(apollo_match.group(1))
                     
-                    logger.info(f"📦 APOLLO_STATE 파싱 성공, 키 개수: {len(apollo_data)}")
+                    # PlaceDetailBase:{place_id} 키에서 데이터 추출
+                    place_key = f"PlaceDetailBase:{place_id}"
                     
-                    # PlaceBase나 Place로 시작하는 키 찾기
+                    if place_key in apollo_data:
+                        place_data = apollo_data[place_key]
+                        
+                        # 업체명
+                        result['name'] = place_data.get('name', '')
+                        
+                        # 카테고리
+                        result['category'] = place_data.get('category', '')
+                        
+                        # ✅ 방문자 리뷰 수 (visitorReviewsTotal)
+                        result['review_count'] = int(place_data.get('visitorReviewsTotal', 0) or 0)
+                        
+                        # ✅ 텍스트 리뷰 수 (visitorReviewsTextReviewTotal)
+                        text_review = int(place_data.get('visitorReviewsTextReviewTotal', 0) or 0)
+                        
+                        # ✅ 방문자 평점 (visitorReviewsScore)
+                        result['visitor_score'] = float(place_data.get('visitorReviewsScore', 0) or 0)
+                        
+                        # ✅ 마이크로 리뷰 (한줄평)
+                        micro_reviews = place_data.get('microReviews', [])
+                        if micro_reviews and isinstance(micro_reviews, list):
+                            result['micro_review'] = micro_reviews[0] if micro_reviews else ''
+                        
+                        # ✅ 편의시설
+                        conveniences = place_data.get('conveniences', [])
+                        if conveniences:
+                            result['conveniences'] = conveniences
+                        
+                        if result['name']:
+                            result['success'] = True
+                    
+                    # 다른 키들에서 추가 정보 탐색
                     for key, value in apollo_data.items():
                         if not isinstance(value, dict):
                             continue
                         
-                        # 업체명
-                        if 'name' in value and not result['name']:
-                            name = value.get('name', '')
-                            if name and isinstance(name, str) and len(name) < 100:
-                                result['name'] = name
-                                logger.info(f"✅ 업체명 발견: {name}")
+                        # 저장 수 찾기 (다른 키에 있을 수 있음)
+                        if result['save_count'] == 0:
+                            for save_key in ['saveCount', 'bookmarkCount', 'savedCount', 'saveNum']:
+                                if save_key in value:
+                                    try:
+                                        result['save_count'] = int(value[save_key] or 0)
+                                        break
+                                    except:
+                                        pass
                         
-                        # 카테고리
-                        if 'category' in value and not result['category']:
-                            cat = value.get('category', '')
-                            if cat and isinstance(cat, str):
-                                result['category'] = cat
-                        
-                        # 저장 수 (여러 필드명 시도)
-                        for save_key in ['saveCount', 'bookingCount', 'bookmarkCount']:
-                            if save_key in value and result['save_count'] == 0:
-                                try:
-                                    result['save_count'] = int(value[save_key] or 0)
-                                except:
-                                    pass
-                        
-                        # 방문자 리뷰
-                        for review_key in ['visitorReviewCount', 'reviewCount']:
-                            if review_key in value and result['review_count'] == 0:
-                                try:
-                                    result['review_count'] = int(value[review_key] or 0)
-                                except:
-                                    pass
-                        
-                        # 블로그 리뷰
-                        if 'blogReviewCount' in value and result['blog_count'] == 0:
-                            try:
-                                result['blog_count'] = int(value['blogReviewCount'] or 0)
-                            except:
-                                pass
+                        # 블로그 리뷰 수
+                        if result['blog_count'] == 0:
+                            for blog_key in ['blogReviewCount', 'blogReviewsTotal', 'blogCount']:
+                                if blog_key in value:
+                                    try:
+                                        result['blog_count'] = int(value[blog_key] or 0)
+                                        break
+                                    except:
+                                        pass
                         
                         # 키워드
-                        for kw_key in ['keywords', 'keywordList', 'tags']:
-                            if kw_key in value and not result['keywords']:
-                                kw_value = value[kw_key]
-                                if isinstance(kw_value, list):
-                                    result['keywords'] = [k for k in kw_value if k and isinstance(k, str)][:10]
+                        if not result['keywords']:
+                            for kw_key in ['keywords', 'keywordList', 'tags', 'representKeywords']:
+                                if kw_key in value and isinstance(value[kw_key], list):
+                                    keywords = [k for k in value[kw_key] if k and isinstance(k, str)]
+                                    if keywords:
+                                        result['keywords'] = keywords[:10]
+                                        break
                     
-                    if result['name']:
-                        result['success'] = True
-                        logger.info(f"✅ APOLLO에서 추출 완료")
+                    if result['success']:
+                        logger.info(f"✅ 플레이스 조회 성공: {place_id}")
                         return result
                         
                 except json.JSONDecodeError as e:
                     logger.debug(f"APOLLO JSON 파싱 오류: {e}")
             
-            # ✅ 방법 2: __NEXT_DATA__ 에서 추출
-            next_match = re.search(
-                r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>',
-                html, re.DOTALL
-            )
-            
-            if next_match:
-                try:
-                    next_data = json.loads(next_match.group(1))
-                    logger.info(f"📦 NEXT_DATA 파싱 성공")
-                    
-                    # 깊이 우선 탐색으로 place 데이터 찾기
-                    def extract_place_info(obj, depth=0):
-                        if depth > 15 or obj is None:
-                            return
-                        
-                        if isinstance(obj, dict):
-                            # name과 함께 다른 정보가 있는 객체 찾기
-                            if 'name' in obj and not result['name']:
-                                name = obj.get('name')
-                                if isinstance(name, str) and 2 < len(name) < 50:
-                                    result['name'] = name
-                            
-                            if 'category' in obj and not result['category']:
-                                cat = obj.get('category')
-                                if isinstance(cat, str):
-                                    result['category'] = cat
-                            
-                            if 'saveCount' in obj and result['save_count'] == 0:
-                                try:
-                                    result['save_count'] = int(obj['saveCount'] or 0)
-                                except:
-                                    pass
-                            
-                            if 'visitorReviewCount' in obj and result['review_count'] == 0:
-                                try:
-                                    result['review_count'] = int(obj['visitorReviewCount'] or 0)
-                                except:
-                                    pass
-                            
-                            if 'blogReviewCount' in obj and result['blog_count'] == 0:
-                                try:
-                                    result['blog_count'] = int(obj['blogReviewCount'] or 0)
-                                except:
-                                    pass
-                            
-                            if 'keywords' in obj and not result['keywords']:
-                                kws = obj.get('keywords')
-                                if isinstance(kws, list):
-                                    result['keywords'] = [k for k in kws if isinstance(k, str)][:10]
-                            
-                            for v in obj.values():
-                                extract_place_info(v, depth + 1)
-                        
-                        elif isinstance(obj, list):
-                            for item in obj:
-                                extract_place_info(item, depth + 1)
-                    
-                    extract_place_info(next_data)
-                    
-                    if result['name']:
-                        result['success'] = True
-                        logger.info(f"✅ NEXT_DATA에서 추출 완료")
-                        return result
-                        
-                except json.JSONDecodeError as e:
-                    logger.debug(f"NEXT_DATA JSON 파싱 오류: {e}")
-            
-            # ✅ 방법 3: 정규식으로 직접 추출
-            logger.info("📝 정규식 추출 시도...")
-            
-            # 업체명
+            # ✅ 정규식 Fallback
             if not result['name']:
-                patterns = [
-                    r'"name"\s*:\s*"([^"]{2,50})"',
-                    r'<strong[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)</strong>',
-                    r'<h1[^>]*>([^<]{2,50})</h1>',
+                # 업체명
+                name_match = re.search(r'"name"\s*:\s*"([^"]{2,50})"', html)
+                if name_match:
+                    result['name'] = name_match.group(1)
+            
+            if result['review_count'] == 0:
+                # 방문자 리뷰 수
+                review_match = re.search(r'"visitorReviewsTotal"\s*:\s*(\d+)', html)
+                if review_match:
+                    result['review_count'] = int(review_match.group(1))
+            
+            if result['blog_count'] == 0:
+                # 블로그 리뷰
+                blog_patterns = [
+                    r'"blogReviewCount"\s*:\s*(\d+)',
+                    r'"blogReviewsTotal"\s*:\s*(\d+)',
+                    r'블로그리뷰\D*(\d[\d,]*)',
                 ]
-                for p in patterns:
+                for p in blog_patterns:
                     m = re.search(p, html)
                     if m:
-                        result['name'] = m.group(1).strip()
+                        result['blog_count'] = int(m.group(1).replace(',', ''))
                         break
             
-            # 저장 수
             if result['save_count'] == 0:
-                patterns = [
+                # 저장 수
+                save_patterns = [
                     r'"saveCount"\s*:\s*(\d+)',
                     r'"bookmarkCount"\s*:\s*(\d+)',
                     r'저장\D*(\d[\d,]*)',
                 ]
-                for p in patterns:
+                for p in save_patterns:
                     m = re.search(p, html)
                     if m:
-                        try:
-                            result['save_count'] = int(m.group(1).replace(',', ''))
-                            break
-                        except:
-                            pass
+                        result['save_count'] = int(m.group(1).replace(',', ''))
+                        break
             
-            # 방문자 리뷰
-            if result['review_count'] == 0:
-                patterns = [
-                    r'"visitorReviewCount"\s*:\s*(\d+)',
-                    r'"reviewCount"\s*:\s*(\d+)',
-                    r'방문자리뷰\D*(\d[\d,]*)',
-                    r'리뷰\s*(\d[\d,]*)',
-                ]
-                for p in patterns:
-                    m = re.search(p, html)
-                    if m:
-                        try:
-                            result['review_count'] = int(m.group(1).replace(',', ''))
-                            break
-                        except:
-                            pass
-            
-            # 블로그 리뷰
-            if result['blog_count'] == 0:
-                patterns = [
-                    r'"blogReviewCount"\s*:\s*(\d+)',
-                    r'블로그리뷰\D*(\d[\d,]*)',
-                    r'블로그\s*(\d[\d,]*)',
-                ]
-                for p in patterns:
-                    m = re.search(p, html)
-                    if m:
-                        try:
-                            result['blog_count'] = int(m.group(1).replace(',', ''))
-                            break
-                        except:
-                            pass
-            
-            # 키워드
-            if not result['keywords']:
-                patterns = [
-                    r'"keywords"\s*:\s*\[([^\]]*)\]',
-                    r'"keywordList"\s*:\s*\[([^\]]*)\]',
-                ]
-                for p in patterns:
-                    m = re.search(p, html)
-                    if m:
-                        kw_str = m.group(1)
-                        keywords = re.findall(r'"([^"]+)"', kw_str)
-                        if keywords:
-                            result['keywords'] = keywords[:10]
-                            break
-            
-            # 카테고리
             if not result['category']:
-                m = re.search(r'"category"\s*:\s*"([^"]+)"', html)
-                if m:
-                    result['category'] = m.group(1)
+                cat_match = re.search(r'"category"\s*:\s*"([^"]+)"', html)
+                if cat_match:
+                    result['category'] = cat_match.group(1)
             
-            if result['name'] or result['save_count'] > 0 or result['review_count'] > 0:
+            if result['visitor_score'] == 0:
+                score_match = re.search(r'"visitorReviewsScore"\s*:\s*([\d.]+)', html)
+                if score_match:
+                    result['visitor_score'] = float(score_match.group(1))
+            
+            if result['name'] or result['review_count'] > 0:
                 result['success'] = True
-                logger.info(f"✅ 정규식으로 추출 완료: {result}")
                 return result
                     
-        except requests.Timeout:
-            logger.debug(f"타임아웃 ({category})")
-            continue
         except Exception as e:
-            logger.error(f"오류 ({category}): {str(e)}")
+            logger.debug(f"오류 ({category}): {str(e)}")
             continue
     
-    logger.warning(f"❌ 모든 방법 실패: {place_id}")
     return result
 
 
@@ -1669,61 +1568,40 @@ def format_place_detail(input_str):
     
     # 기본 정보
     if result["name"]:
-        lines.append(f"업체명: {result['name']}")
+        lines.append(f"📍 {result['name']}")
     if result["category"]:
         lines.append(f"카테고리: {result['category']}")
     lines.append(f"플레이스ID: {extracted_id}")
     lines.append("")
     
-    # 저장/리뷰 수
+    # 평점 및 리뷰
     lines.append("━━━━━━━━━━━━━━")
-    lines.append(f"⭐ 저장: {format_number(result['save_count'])}명")
+    
+    if result["visitor_score"] > 0:
+        lines.append(f"⭐ 평점: {result['visitor_score']:.2f}")
+    
     lines.append(f"📝 방문자리뷰: {format_number(result['review_count'])}개")
-    lines.append(f"📰 블로그리뷰: {format_number(result['blog_count'])}개")
+    
+    if result["blog_count"] > 0:
+        lines.append(f"📰 블로그리뷰: {format_number(result['blog_count'])}개")
+    
+    if result["save_count"] > 0:
+        lines.append(f"💾 저장: {format_number(result['save_count'])}명")
+    
     lines.append("━━━━━━━━━━━━━━")
-    lines.append("")
+    
+    # 한줄평
+    if result.get("micro_review"):
+        lines.append("")
+        lines.append(f"💬 \"{result['micro_review']}\"")
+    
+    # 편의시설
+    if result.get("conveniences"):
+        lines.append("")
+        lines.append(f"🏷️ {', '.join(result['conveniences'][:5])}")
     
     # 대표 키워드
-    if result["keywords"]:
-        lines.append("▶ 대표키워드")
-        for i, kw in enumerate(result["keywords"], 1):
-            lines.append(f"{i}. {kw}")
-        lines.append("")
-        lines.append(f"복사용: {', '.join(result['keywords'])}")
-    else:
-        lines.append("▶ 대표키워드: 없음")
-    
-    return "\n".join(lines)
-
-
-def format_place_keywords(input_str):
-    """플레이스 대표키워드만 조회"""
-    
-    extracted_id = extract_place_id_from_url(str(input_str).strip())
-    
-    if not extracted_id:
-        return """[대표키워드] 조회 실패
-
-플레이스 ID를 찾을 수 없습니다.
-
-사용법:
-대표 1234567890"""
-    
-    result = get_place_detail(extracted_id)
-    
-    if not result["success"]:
-        return f"""[대표키워드] 조회 실패
-
-플레이스 ID: {extracted_id}
-정보를 가져올 수 없습니다."""
-    
-    lines = ["[대표키워드]", ""]
-    
-    if result["name"]:
-        lines.append(f"업체명: {result['name']}")
-    lines.append(f"플레이스ID: {extracted_id}")
     lines.append("")
-    
     if result["keywords"]:
         lines.append("▶ 대표키워드")
         for i, kw in enumerate(result["keywords"], 1):
