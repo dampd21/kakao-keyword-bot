@@ -1317,72 +1317,144 @@ def get_lotto_fallback():
     result += "\n행운을 빕니다!\n※ 재미로만 즐기세요!"
     return result
 
-
 #############################################
-# 기능 7: 대표키워드
+# 기능: 플레이스 상세 정보 (저장+리뷰+대표키워드 통합)
 #############################################
-def extract_place_id_from_url(url_or_id):
-    url_or_id = url_or_id.strip()
-    if url_or_id.isdigit():
-        return url_or_id
+def get_place_detail(place_id):
+    """플레이스 상세 정보 통합 조회"""
     
-    patterns = [r'/restaurant/(\d+)', r'/place/(\d+)', r'/cafe/(\d+)', r'/hospital/(\d+)', r'/beauty/(\d+)', r'place/(\d+)', r'=(\d{10,})']
-    for pattern in patterns:
-        match = re.search(pattern, url_or_id)
-        if match and len(match.group(1)) >= 7:
-            return match.group(1)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": "https://m.place.naver.com/"
+    }
     
-    match = re.search(r'\d{7,}', url_or_id)
-    return match.group(0) if match else None
-
-
-def get_place_keywords(place_id):
-    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", "Accept-Language": "ko-KR,ko;q=0.9"}
+    place_id = str(place_id).strip()
     
+    result = {
+        "success": False,
+        "place_id": place_id,
+        "name": "",
+        "category": "",
+        "save_count": 0,
+        "review_count": 0,
+        "blog_count": 0,
+        "keywords": []
+    }
+    
+    # 여러 카테고리로 시도
     for category in ['restaurant', 'place', 'cafe', 'hospital', 'beauty']:
         try:
             url = f"https://m.place.naver.com/{category}/{place_id}/home"
             response = requests.get(url, headers=headers, timeout=10)
+            
             if response.status_code == 200:
-                html = response.content.decode('utf-8', errors='ignore')
-                match = re.search(r'"keywordList"\s*:\s*\[((?:"[^"]*",?\s*)*)\]', html)
-                if match:
-                    keywords = json.loads("[" + match.group(1) + "]")
-                    if keywords:
-                        return {"success": True, "keywords": keywords}
-        except:
-            pass
+                html = response.text
+                
+                # 업체명
+                name_match = re.search(r'"name"\s*:\s*"([^"]+)"', html)
+                if name_match:
+                    result["name"] = name_match.group(1)
+                
+                # 카테고리
+                cat_match = re.search(r'"category"\s*:\s*"([^"]+)"', html)
+                if cat_match:
+                    result["category"] = cat_match.group(1)
+                
+                # 저장 수
+                save_patterns = [
+                    r'"saveCount"\s*:\s*(\d+)',
+                    r'"bookmarkCount"\s*:\s*(\d+)',
+                ]
+                for pattern in save_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        result["save_count"] = int(match.group(1))
+                        break
+                
+                # 방문자 리뷰 수
+                review_match = re.search(r'"visitorReviewCount"\s*:\s*(\d+)', html)
+                if review_match:
+                    result["review_count"] = int(review_match.group(1))
+                
+                # 블로그 리뷰 수
+                blog_match = re.search(r'"blogReviewCount"\s*:\s*(\d+)', html)
+                if blog_match:
+                    result["blog_count"] = int(blog_match.group(1))
+                
+                # 대표 키워드
+                keyword_match = re.search(r'"keywordList"\s*:\s*\[((?:"[^"]*",?\s*)*)\]', html)
+                if keyword_match:
+                    try:
+                        keywords = json.loads("[" + keyword_match.group(1) + "]")
+                        result["keywords"] = keywords
+                    except:
+                        pass
+                
+                # 데이터가 있으면 성공
+                if result["name"] or result["save_count"] or result["keywords"]:
+                    result["success"] = True
+                    return result
+                    
+        except Exception as e:
+            logger.debug(f"상세 조회 실패 ({category}): {str(e)}")
+            continue
     
-    return {"success": False, "error": "대표키워드를 찾을 수 없습니다."}
+    return result
 
 
-def format_place_keywords(input_str):
-    place_id = extract_place_id_from_url(input_str.strip())
+def format_place_detail(input_str):
+    """플레이스 상세 정보 포맷팅"""
     
-    if not place_id:
-        return f"""[대표키워드] 조회 실패
+    extracted_id = extract_place_id_from_url(str(input_str).strip())
+    
+    if not extracted_id:
+        return """[플레이스 상세] 조회 실패
 
 플레이스 ID를 찾을 수 없습니다.
 
 사용법:
-대표 1529801174
-대표 place.naver.com/restaurant/1529801174"""
+상세 1234567890
+상세 place.naver.com/restaurant/1234567890"""
     
-    result = get_place_keywords(place_id)
+    result = get_place_detail(extracted_id)
     
     if not result["success"]:
-        return f"""[대표키워드] 조회 실패
+        return f"""[플레이스 상세] 조회 실패
 
-플레이스 ID: {place_id}
-{result['error']}"""
+플레이스 ID: {extracted_id}
+정보를 가져올 수 없습니다."""
     
-    keywords = result["keywords"]
-    response = f"[대표키워드] {place_id}\n\n"
-    for i, kw in enumerate(keywords, 1):
-        response += f"{i}. {kw}\n"
-    response += f"\n복사용: {', '.join(keywords)}"
+    lines = ["[플레이스 상세]", ""]
     
-    return response
+    # 기본 정보
+    if result["name"]:
+        lines.append(f"업체명: {result['name']}")
+    if result["category"]:
+        lines.append(f"카테고리: {result['category']}")
+    lines.append(f"플레이스ID: {extracted_id}")
+    lines.append("")
+    
+    # 저장/리뷰 수
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append(f"⭐ 저장: {format_number(result['save_count'])}명")
+    lines.append(f"📝 방문자리뷰: {format_number(result['review_count'])}개")
+    lines.append(f"📰 블로그리뷰: {format_number(result['blog_count'])}개")
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("")
+    
+    # 대표 키워드
+    if result["keywords"]:
+        lines.append("▶ 대표키워드")
+        for i, kw in enumerate(result["keywords"], 1):
+            lines.append(f"{i}. {kw}")
+        lines.append("")
+        lines.append(f"복사용: {', '.join(result['keywords'])}")
+    else:
+        lines.append("▶ 대표키워드: 없음")
+    
+    return "\n".join(lines)
 
 
 #############################################
@@ -1469,234 +1541,6 @@ def get_youtube_autocomplete(keyword):
         return f"[유튜브 자동완성] {keyword}\n\n조회 실패: {str(e)}"
 
 
-#############################################
-# 기능 10: 플레이스 순위 조회 (광고 제외, 300위까지)
-#############################################
-def get_place_ranking(keyword, place_id):
-    """네이버 플레이스에서 특정 업체의 순위 조회 (광고 제외, 300위까지)"""
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "Referer": "https://m.place.naver.com/"
-    }
-    
-    place_ids = []
-    place_names = {}
-    
-    try:
-        # 페이지별로 조회 (1페이지당 약 50개, 6페이지 = 300개)
-        for page in range(1, 7):
-            search_url = f"https://map.naver.com/v5/api/search?caller=pcweb&query={quote(keyword)}&type=all&page={page}&displayCount=50"
-            
-            response = requests.get(search_url, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                    
-                    if "result" in data and "place" in data["result"]:
-                        place_list = data["result"]["place"].get("list", [])
-                        
-                        if not place_list:
-                            break  # 더 이상 결과 없음
-                        
-                        for item in place_list:
-                            # 광고 제외 (isAd, isAdPlace, ad 관련 필드 체크)
-                            is_ad = (
-                                item.get("isAd") == True or
-                                item.get("isAdPlace") == True or
-                                item.get("ad") == True or
-                                item.get("type") == "ad" or
-                                item.get("adType") is not None or
-                                "ad" in str(item.get("category", "")).lower() or
-                                item.get("isAdvertisement") == True
-                            )
-                            
-                            if is_ad:
-                                continue  # 광고는 스킵
-                            
-                            pid = str(item.get("id", ""))
-                            name = item.get("name", "")
-                            if pid and pid not in place_ids:
-                                place_ids.append(pid)
-                                place_names[pid] = name
-                
-                except json.JSONDecodeError:
-                    pass
-            
-            # API 부하 방지
-            if page < 6:
-                time.sleep(0.2)
-        
-        # 모바일 검색으로 추가 수집 (광고 제외)
-        if len(place_ids) < 100:
-            for page in range(1, 4):
-                start = (page - 1) * 50 + 1
-                mobile_url = f"https://m.search.naver.com/search.naver?where=m_local&query={quote(keyword)}&start={start}"
-                response2 = requests.get(mobile_url, headers=headers, timeout=10)
-                
-                if response2.status_code == 200:
-                    html = response2.text
-                    
-                    # 광고 영역 제거
-                    # 광고는 보통 특정 클래스나 data-ad 속성으로 구분
-                    # 광고가 아닌 일반 결과에서만 ID 추출
-                    
-                    # 광고 영역 패턴 (제외할 부분)
-                    ad_patterns = [
-                        r'data-ad-area.*?(?=data-cr-area|$)',
-                        r'class="[^"]*ad[^"]*".*?(?=class="|$)',
-                        r'광고\s*</span>.*?(?=</li>|</div>)',
-                    ]
-                    
-                    clean_html = html
-                    for ad_pattern in ad_patterns:
-                        clean_html = re.sub(ad_pattern, '', clean_html, flags=re.DOTALL | re.IGNORECASE)
-                    
-                    # 일반 결과에서만 ID 추출
-                    patterns = [
-                        r'place/(\d{7,})',
-                        r'restaurant/(\d{7,})',
-                        r'cafe/(\d{7,})',
-                    ]
-                    
-                    for pattern in patterns:
-                        matches = re.findall(pattern, clean_html)
-                        for match in matches:
-                            if match not in place_ids:
-                                place_ids.append(match)
-                
-                time.sleep(0.2)
-        
-        # 중복 제거 및 300개 제한
-        seen = set()
-        unique_ids = []
-        for pid in place_ids:
-            if pid not in seen:
-                seen.add(pid)
-                unique_ids.append(pid)
-        
-        place_ids = unique_ids[:300]
-        
-        target_id = str(place_id).strip()
-        
-        if target_id in place_ids:
-            rank = place_ids.index(target_id) + 1
-            place_name = place_names.get(target_id, "")
-            
-            if rank == 1:
-                rank_emoji = "🥇"
-            elif rank == 2:
-                rank_emoji = "🥈"
-            elif rank == 3:
-                rank_emoji = "🥉"
-            elif rank <= 5:
-                rank_emoji = "⭐"
-            elif rank <= 10:
-                rank_emoji = "✅"
-            elif rank <= 20:
-                rank_emoji = "📍"
-            elif rank <= 50:
-                rank_emoji = "📌"
-            else:
-                rank_emoji = "🔍"
-            
-            result = f"[플레이스 순위] {keyword}\n\n"
-            result += f"{rank_emoji} 현재 순위: {rank}위 (광고제외)\n\n"
-            result += f"플레이스 ID: {target_id}\n"
-            if place_name:
-                result += f"업체명: {place_name}\n"
-            result += f"\n총 검색 업체: {len(place_ids)}개\n"
-            
-            # 주변 순위 표시
-            if rank > 1:
-                result += f"\n▸ 상위 업체\n"
-                start = max(0, rank - 4)
-                for i in range(start, rank - 1):
-                    pid = place_ids[i]
-                    name = place_names.get(pid, pid[:10])
-                    result += f"  {i+1}위: {name[:15]}\n"
-            
-            result += f"\n▸ 내 업체\n"
-            result += f"  ➤ {rank}위: {place_name if place_name else target_id}\n"
-            
-            if rank < len(place_ids):
-                result += f"\n▸ 하위 업체\n"
-                end = min(len(place_ids), rank + 3)
-                for i in range(rank, end):
-                    pid = place_ids[i]
-                    name = place_names.get(pid, pid[:10])
-                    result += f"  {i+1}위: {name[:15]}\n"
-            
-            result += "\n━━━━━━━━━━━━━━\n"
-            if rank <= 3:
-                result += "💡 상위권 유지 중! 리뷰 관리 필수"
-            elif rank <= 10:
-                result += "💡 10위권! 리뷰 10개 추가로 순위 상승 가능"
-            elif rank <= 20:
-                result += "💡 20위권, 블로그+리뷰 병행 필요"
-            elif rank <= 50:
-                result += "💡 50위권, 적극적 마케팅 필요"
-            elif rank <= 100:
-                result += "💡 100위권, 리뷰/블로그/광고 병행 권장"
-            else:
-                result += "💡 하위권, 집중 마케팅 필요"
-            
-            return result
-        
-        else:
-            result = f"[플레이스 순위] {keyword}\n\n"
-            result += f"❌ 순위권 외 (300위 밖)\n\n"
-            result += f"플레이스 ID: {target_id}\n"
-            result += f"검색된 업체 수: {len(place_ids)}개 (광고제외)\n"
-            result += "\n━━━━━━━━━━━━━━\n"
-            result += "💡 300위 밖은 노출 효과 거의 없음\n"
-            result += "💡 플레이스 광고 또는 대규모 리뷰 확보 필요"
-            
-            if place_ids[:5]:
-                result += "\n\n▸ 현재 상위 5개 업체\n"
-                for i, pid in enumerate(place_ids[:5], 1):
-                    name = place_names.get(pid, pid[:10])
-                    result += f"  {i}위: {name[:20]}\n"
-            
-            return result
-    
-    except Exception as e:
-        logger.error(f"순위 조회 오류: {str(e)}")
-        return f"[플레이스 순위] 조회 실패\n\n오류: {str(e)}"
-
-
-def parse_ranking_input(user_input):
-    """순위 조회 입력 파싱: '순위 키워드 플레이스ID'"""
-    
-    text = user_input.strip()
-    if text.startswith("순위 "):
-        text = text[3:].strip()
-    elif text.startswith("순위"):
-        text = text[2:].strip()
-    
-    words = text.split()
-    
-    place_id = None
-    keyword_parts = []
-    
-    for i, word in enumerate(reversed(words)):
-        extracted = extract_place_id_from_url(word)
-        if extracted:
-            place_id = extracted
-            keyword_parts = words[:len(words) - i - 1]
-            break
-        elif word.isdigit() and len(word) >= 7:
-            place_id = word
-            keyword_parts = words[:len(words) - i - 1]
-            break
-    
-    keyword = " ".join(keyword_parts).strip()
-    
-    return keyword, place_id
-
 
 #############################################
 # 도움말
@@ -1705,8 +1549,14 @@ def get_help():
     return """[사용 가이드]
 
 ▶ 키워드 검색량 (최대 5개)
-방법) 키워드1, 키워드2, 키워드3, 키워드4, 키워드5
+방법) 키워드1,키워드2,키워드3,키워드4,키워드5
 예) 인천맛집,강남맛집,서울맛집,부산맛집,전주맛집
+
+▶ 플레이스 상세 (리뷰수+저장수+대표키워드)
+방법) 상세+플레이스ID
+방법) 상세+플레이스주소
+예) 상세 12345678
+예) 상세 m.place.naver.com/restaurant/1309812619/home
 
 ▶ 상권분석 (트렌드+매출+고객)
 방법) 상권+키워드
@@ -1720,24 +1570,13 @@ def get_help():
 방법) 자동+키워드
 예) 자동 인천맛집
 
-▶ 자동완성어 (유튜브)
+▶ 유튜브 자동완성어
 방법) 유튜브+키워드
 예) 유튜브 인천맛집
 
-▶ 파워링크 CPC 광고 단가
+▶ CPC 파워링크 광고 단가
 방법) 광고+키워드
 예) 광고 인천맛집
-
-▶ 대표 키워드
-방법) 대표+플레이스ID
-방법) 대표+플레이스 URL주소
-예) 대표 12345678
-예) 대표 m.place.naver.com/restaurant/1309812619/home
-
-▶ 플레이스 순위 조회 (광고제외)
-방법) 순위+키워드+플레이스ID
-예) 순위 부평맛집 12345678
-예) 순위 강남맛집 1309812619
 
 ▶ 재미 기능
 운세 → 운세 870114
@@ -1910,14 +1749,7 @@ def kakao_skill():
             if keyword:
                 return create_kakao_response(get_autocomplete(keyword))
             return create_kakao_response("예) 자동 부평맛집")
-        
-        # 플레이스 순위 조회 (신규)
-        if lower_input.startswith("순위 "):
-            keyword, place_id = parse_ranking_input(user_utterance)
-            if keyword and place_id:
-                return create_kakao_response(get_place_ranking(keyword, place_id))
-            return create_kakao_response("예) 순위 부평맛집 1234567890\n예) 순위 강남맛집 place.naver.com/restaurant/12345")
-        
+       
         # 대표키워드
         if lower_input.startswith("대표 ") or lower_input.startswith("대표키워드 "):
             input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
@@ -1947,6 +1779,13 @@ def kakao_skill():
             return create_kakao_response(get_search_volume(keyword))
         else:
             return create_kakao_response(get_search_volume(clean_keyword(keyword)))
+
+        # 플레이스 상세 (저장+리뷰+대표키워드 통합)
+        if lower_input.startswith("상세 "):
+            input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            if input_text:
+                return create_kakao_response(format_place_detail(input_text))
+            return create_kakao_response("예) 상세 1234567890\n예) 상세 place.naver.com/restaurant/12345")
     
     except Exception as e:
         logger.error(f"스킬 오류: {str(e)}")
