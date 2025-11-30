@@ -1383,48 +1383,144 @@ def get_place_detail(place_id):
             if response.status_code == 200:
                 html = response.text
                 
-                # 업체명
-                name_match = re.search(r'"name"\s*:\s*"([^"]+)"', html)
-                if name_match:
-                    result["name"] = name_match.group(1)
+                # ✅ JSON 블록 추출 및 파싱 (유니코드 디코딩 포함)
+                json_pattern = r'<script[^>]*>\s*window\.__APOLLO_STATE__\s*=\s*({.*?});\s*</script>'
+                json_match = re.search(json_pattern, html, re.DOTALL)
                 
-                # 카테고리
-                cat_match = re.search(r'"category"\s*:\s*"([^"]+)"', html)
-                if cat_match:
-                    result["category"] = cat_match.group(1)
-                
-                # 저장 수
-                save_patterns = [
-                    r'"saveCount"\s*:\s*(\d+)',
-                    r'"bookmarkCount"\s*:\s*(\d+)',
-                ]
-                for pattern in save_patterns:
-                    match = re.search(pattern, html)
-                    if match:
-                        result["save_count"] = int(match.group(1))
-                        break
-                
-                # 방문자 리뷰 수
-                review_match = re.search(r'"visitorReviewCount"\s*:\s*(\d+)', html)
-                if review_match:
-                    result["review_count"] = int(review_match.group(1))
-                
-                # 블로그 리뷰 수
-                blog_match = re.search(r'"blogReviewCount"\s*:\s*(\d+)', html)
-                if blog_match:
-                    result["blog_count"] = int(blog_match.group(1))
-                
-                # 대표 키워드
-                keyword_match = re.search(r'"keywordList"\s*:\s*\[((?:"[^"]*",?\s*)*)\]', html)
-                if keyword_match:
+                if json_match:
                     try:
-                        keywords = json.loads("[" + keyword_match.group(1) + "]")
-                        result["keywords"] = keywords
-                    except:
-                        pass
+                        json_str = json_match.group(1)
+                        data = json.loads(json_str)
+                        
+                        # 데이터 추출
+                        for key, value in data.items():
+                            if isinstance(value, dict):
+                                # 업체명
+                                if 'name' in value and not result['name']:
+                                    result['name'] = value['name']
+                                
+                                # 카테고리
+                                if 'category' in value and not result['category']:
+                                    result['category'] = value['category']
+                                
+                                # 저장 수
+                                if 'saveCount' in value:
+                                    result['save_count'] = int(value['saveCount'])
+                                elif 'bookmarkCount' in value:
+                                    result['save_count'] = int(value['bookmarkCount'])
+                                
+                                # 방문자 리뷰
+                                if 'visitorReviewCount' in value:
+                                    result['review_count'] = int(value['visitorReviewCount'])
+                                
+                                # 블로그 리뷰
+                                if 'blogReviewCount' in value:
+                                    result['blog_count'] = int(value['blogReviewCount'])
+                                
+                                # 대표 키워드
+                                if 'keywordList' in value and isinstance(value['keywordList'], list):
+                                    result['keywords'] = value['keywordList']
+                    
+                    except json.JSONDecodeError:
+                        logger.debug(f"JSON 파싱 실패 ({category})")
+                
+                # ✅ JSON 파싱 실패 시 정규표현식 fallback (유니코드 디코딩 추가)
+                if not result['name']:
+                    name_patterns = [
+                        r'"name"\s*:\s*"([^"]+)"',
+                        r'<meta property="og:title" content="([^"]+)"',
+                        r'<h1[^>]*>([^<]+)</h1>'
+                    ]
+                    for pattern in name_patterns:
+                        match = re.search(pattern, html)
+                        if match:
+                            # ✅ 유니코드 이스케이프 디코딩
+                            name = match.group(1)
+                            try:
+                                result['name'] = name.encode('utf-8').decode('unicode_escape')
+                            except:
+                                result['name'] = name
+                            break
+                
+                if not result['category']:
+                    cat_patterns = [
+                        r'"category"\s*:\s*"([^"]+)"',
+                        r'<span class="[^"]*category[^"]*">([^<]+)</span>'
+                    ]
+                    for pattern in cat_patterns:
+                        match = re.search(pattern, html)
+                        if match:
+                            cat = match.group(1)
+                            try:
+                                result['category'] = cat.encode('utf-8').decode('unicode_escape')
+                            except:
+                                result['category'] = cat
+                            break
+                
+                if result['save_count'] == 0:
+                    save_patterns = [
+                        r'"saveCount"\s*:\s*(\d+)',
+                        r'"bookmarkCount"\s*:\s*(\d+)',
+                        r'저장\s*(\d[\d,]*)',
+                    ]
+                    for pattern in save_patterns:
+                        match = re.search(pattern, html)
+                        if match:
+                            count_str = match.group(1).replace(',', '')
+                            result['save_count'] = int(count_str)
+                            break
+                
+                if result['review_count'] == 0:
+                    review_patterns = [
+                        r'"visitorReviewCount"\s*:\s*(\d+)',
+                        r'방문자리뷰\s*(\d[\d,]*)',
+                        r'리뷰\s*(\d[\d,]*)'
+                    ]
+                    for pattern in review_patterns:
+                        match = re.search(pattern, html)
+                        if match:
+                            count_str = match.group(1).replace(',', '')
+                            result['review_count'] = int(count_str)
+                            break
+                
+                if result['blog_count'] == 0:
+                    blog_patterns = [
+                        r'"blogReviewCount"\s*:\s*(\d+)',
+                        r'블로그리뷰\s*(\d[\d,]*)',
+                    ]
+                    for pattern in blog_patterns:
+                        match = re.search(pattern, html)
+                        if match:
+                            count_str = match.group(1).replace(',', '')
+                            result['blog_count'] = int(count_str)
+                            break
+                
+                if not result['keywords']:
+                    # ✅ 키워드 리스트 추출 (유니코드 디코딩)
+                    keyword_patterns = [
+                        r'"keywordList"\s*:\s*\[((?:"[^"]*"(?:,\s*)?)*)\]',
+                        r'대표\s*키워드[^[]*\[([^\]]+)\]'
+                    ]
+                    for pattern in keyword_patterns:
+                        match = re.search(pattern, html)
+                        if match:
+                            try:
+                                keywords_str = '[' + match.group(1) + ']'
+                                keywords = json.loads(keywords_str)
+                                # ✅ 각 키워드 디코딩
+                                result['keywords'] = []
+                                for kw in keywords:
+                                    try:
+                                        decoded = kw.encode('utf-8').decode('unicode_escape')
+                                        result['keywords'].append(decoded)
+                                    except:
+                                        result['keywords'].append(kw)
+                                break
+                            except:
+                                pass
                 
                 # 데이터가 있으면 성공
-                if result["name"] or result["save_count"] or result["keywords"]:
+                if result["name"] or result["save_count"] > 0 or result["keywords"]:
                     result["success"] = True
                     return result
                     
