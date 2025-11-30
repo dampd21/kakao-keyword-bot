@@ -1356,8 +1356,9 @@ def get_place_detail(place_id):
     
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
         "Referer": "https://m.place.naver.com/"
     }
     
@@ -1374,34 +1375,60 @@ def get_place_detail(place_id):
         "keywords": []
     }
     
+    # ✅ 유틸리티 함수: 깨진 인코딩 복구
+    def fix_encoding(text):
+        """Latin-1로 잘못 읽힌 UTF-8 문자열 복구"""
+        if not text:
+            return text
+        try:
+            # 이미 제대로 된 한글이면 그대로 반환
+            if any('\uac00' <= c <= '\ud7a3' for c in text):
+                return text
+            # Latin-1 -> UTF-8 변환
+            return text.encode('latin1').decode('utf-8')
+        except:
+            try:
+                # ISO-8859-1 -> UTF-8 시도
+                return text.encode('iso-8859-1').decode('utf-8')
+            except:
+                return text
+    
     # 여러 카테고리로 시도
-    for category in ['restaurant', 'place', 'cafe', 'hospital', 'beauty']:
+    for category in ['restaurant', 'place', 'cafe', 'hospital', 'beauty', 'accommodation']:
         try:
             url = f"https://m.place.naver.com/{category}/{place_id}/home"
+            
+            # ✅ 인코딩 명시적 처리
             response = requests.get(url, headers=headers, timeout=10)
+            response.encoding = 'utf-8'  # UTF-8 강제 지정
             
             if response.status_code == 200:
                 html = response.text
                 
-                # ✅ JSON 블록 추출 및 파싱 (유니코드 디코딩 포함)
-                json_pattern = r'<script[^>]*>\s*window\.__APOLLO_STATE__\s*=\s*({.*?});\s*</script>'
-                json_match = re.search(json_pattern, html, re.DOTALL)
+                # ✅ 1. JSON 블록에서 데이터 추출 (가장 정확)
+                json_patterns = [
+                    r'window\.__APOLLO_STATE__\s*=\s*({.*?});',
+                    r'<script id="__NEXT_DATA__"[^>]*>({.*?})</script>',
+                ]
                 
-                if json_match:
-                    try:
-                        json_str = json_match.group(1)
-                        data = json.loads(json_str)
-                        
-                        # 데이터 추출
-                        for key, value in data.items():
-                            if isinstance(value, dict):
+                for json_pattern in json_patterns:
+                    json_match = re.search(json_pattern, html, re.DOTALL)
+                    if json_match:
+                        try:
+                            data = json.loads(json_match.group(1))
+                            
+                            # ROOT_QUERY나 Place 객체 찾기
+                            for key, value in data.items():
+                                if not isinstance(value, dict):
+                                    continue
+                                
                                 # 업체명
-                                if 'name' in value and not result['name']:
-                                    result['name'] = value['name']
+                                if 'name' in value and value['name'] and not result['name']:
+                                    result['name'] = fix_encoding(value['name'])
                                 
                                 # 카테고리
-                                if 'category' in value and not result['category']:
-                                    result['category'] = value['category']
+                                if 'category' in value and value['category'] and not result['category']:
+                                    result['category'] = fix_encoding(value['category'])
                                 
                                 # 저장 수
                                 if 'saveCount' in value:
@@ -1412,122 +1439,96 @@ def get_place_detail(place_id):
                                 # 방문자 리뷰
                                 if 'visitorReviewCount' in value:
                                     result['review_count'] = int(value['visitorReviewCount'])
+                                elif 'visitorReview' in value and isinstance(value['visitorReview'], dict):
+                                    result['review_count'] = int(value['visitorReview'].get('total', 0))
                                 
                                 # 블로그 리뷰
                                 if 'blogReviewCount' in value:
                                     result['blog_count'] = int(value['blogReviewCount'])
+                                elif 'blogReview' in value and isinstance(value['blogReview'], dict):
+                                    result['blog_count'] = int(value['blogReview'].get('total', 0))
                                 
                                 # 대표 키워드
                                 if 'keywordList' in value and isinstance(value['keywordList'], list):
-                                    result['keywords'] = value['keywordList']
-                    
-                    except json.JSONDecodeError:
-                        logger.debug(f"JSON 파싱 실패 ({category})")
+                                    result['keywords'] = [fix_encoding(k) for k in value['keywordList'] if k]
+                                
+                                # tags 필드도 체크
+                                if 'tags' in value and isinstance(value['tags'], list):
+                                    if not result['keywords']:
+                                        result['keywords'] = [fix_encoding(tag) for tag in value['tags'] if tag]
+                        
+                        except Exception as e:
+                            logger.debug(f"JSON 파싱 오류: {e}")
                 
-                # ✅ JSON 파싱 실패 시 정규표현식 fallback (유니코드 디코딩 추가)
+                # ✅ 2. 정규표현식 Fallback
                 if not result['name']:
                     name_patterns = [
-                        r'"name"\s*:\s*"([^"]+)"',
                         r'<meta property="og:title" content="([^"]+)"',
-                        r'<h1[^>]*>([^<]+)</h1>'
+                        r'"name"\s*:\s*"([^"]+)"',
+                        r'<h1[^>]*class="[^"]*GHAhO[^"]*"[^>]*>([^<]+)</h1>',
+                        r'<span class="[^"]*Fc1rA[^"]*">([^<]+)</span>',
                     ]
                     for pattern in name_patterns:
                         match = re.search(pattern, html)
                         if match:
-                            # ✅ 유니코드 이스케이프 디코딩
-                            name = match.group(1)
-                            try:
-                                result['name'] = name.encode('utf-8').decode('unicode_escape')
-                            except:
-                                result['name'] = name
-                            break
+                            result['name'] = fix_encoding(match.group(1).strip())
+                            if result['name']:
+                                break
                 
                 if not result['category']:
                     cat_patterns = [
+                        r'<meta property="business:contact_data:street_address" content="([^"]*)".*?<span class="[^"]*DJJvD[^"]*">([^<]+)</span>',
+                        r'<span class="[^"]*DJJvD[^"]*">([^<]+)</span>',
                         r'"category"\s*:\s*"([^"]+)"',
-                        r'<span class="[^"]*category[^"]*">([^<]+)</span>'
                     ]
                     for pattern in cat_patterns:
                         match = re.search(pattern, html)
                         if match:
-                            cat = match.group(1)
-                            try:
-                                result['category'] = cat.encode('utf-8').decode('unicode_escape')
-                            except:
-                                result['category'] = cat
-                            break
+                            cat_text = match.group(1) if match.lastindex == 1 else match.group(2)
+                            result['category'] = fix_encoding(cat_text.strip())
+                            if result['category']:
+                                break
                 
+                # 저장/리뷰 수 (숫자는 인코딩 문제 없음)
                 if result['save_count'] == 0:
-                    save_patterns = [
-                        r'"saveCount"\s*:\s*(\d+)',
-                        r'"bookmarkCount"\s*:\s*(\d+)',
-                        r'저장\s*(\d[\d,]*)',
-                    ]
-                    for pattern in save_patterns:
-                        match = re.search(pattern, html)
-                        if match:
-                            count_str = match.group(1).replace(',', '')
-                            result['save_count'] = int(count_str)
-                            break
+                    save_match = re.search(r'저장\s*([0-9,]+)', html)
+                    if save_match:
+                        result['save_count'] = int(save_match.group(1).replace(',', ''))
                 
                 if result['review_count'] == 0:
-                    review_patterns = [
-                        r'"visitorReviewCount"\s*:\s*(\d+)',
-                        r'방문자리뷰\s*(\d[\d,]*)',
-                        r'리뷰\s*(\d[\d,]*)'
-                    ]
-                    for pattern in review_patterns:
-                        match = re.search(pattern, html)
-                        if match:
-                            count_str = match.group(1).replace(',', '')
-                            result['review_count'] = int(count_str)
-                            break
+                    review_match = re.search(r'방문자리뷰\s*([0-9,]+)', html)
+                    if review_match:
+                        result['review_count'] = int(review_match.group(1).replace(',', ''))
                 
                 if result['blog_count'] == 0:
-                    blog_patterns = [
-                        r'"blogReviewCount"\s*:\s*(\d+)',
-                        r'블로그리뷰\s*(\d[\d,]*)',
+                    blog_match = re.search(r'블로그리뷰\s*([0-9,]+)', html)
+                    if blog_match:
+                        result['blog_count'] = int(blog_match.group(1).replace(',', ''))
+                
+                # 대표 키워드
+                if not result['keywords']:
+                    # HTML에서 키워드 추출
+                    kw_patterns = [
+                        r'<a[^>]*class="[^"]*place_keyword[^"]*"[^>]*>([^<]+)</a>',
+                        r'<span class="[^"]*_3XamX[^"]*">([^<]+)</span>',
                     ]
-                    for pattern in blog_patterns:
-                        match = re.search(pattern, html)
-                        if match:
-                            count_str = match.group(1).replace(',', '')
-                            result['blog_count'] = int(count_str)
+                    for pattern in kw_patterns:
+                        matches = re.findall(pattern, html)
+                        if matches:
+                            result['keywords'] = [fix_encoding(kw.strip()) for kw in matches[:10] if kw.strip()]
                             break
                 
-                if not result['keywords']:
-                    # ✅ 키워드 리스트 추출 (유니코드 디코딩)
-                    keyword_patterns = [
-                        r'"keywordList"\s*:\s*\[((?:"[^"]*"(?:,\s*)?)*)\]',
-                        r'대표\s*키워드[^[]*\[([^\]]+)\]'
-                    ]
-                    for pattern in keyword_patterns:
-                        match = re.search(pattern, html)
-                        if match:
-                            try:
-                                keywords_str = '[' + match.group(1) + ']'
-                                keywords = json.loads(keywords_str)
-                                # ✅ 각 키워드 디코딩
-                                result['keywords'] = []
-                                for kw in keywords:
-                                    try:
-                                        decoded = kw.encode('utf-8').decode('unicode_escape')
-                                        result['keywords'].append(decoded)
-                                    except:
-                                        result['keywords'].append(kw)
-                                break
-                            except:
-                                pass
-                
-                # 데이터가 있으면 성공
+                # 성공 판단
                 if result["name"] or result["save_count"] > 0 or result["keywords"]:
                     result["success"] = True
+                    logger.info(f"✅ 플레이스 조회 성공: {place_id} ({category})")
                     return result
                     
         except Exception as e:
             logger.debug(f"상세 조회 실패 ({category}): {str(e)}")
             continue
     
+    logger.warning(f"❌ 플레이스 조회 실패: {place_id}")
     return result
 
 
