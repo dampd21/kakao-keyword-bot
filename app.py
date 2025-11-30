@@ -525,7 +525,6 @@ def get_place_reviews(keyword, max_count=20):
 def estimate_business_count(search_volume, comp_idx, region=None):
     """검색량과 경쟁도를 기반으로 업체 수 추정"""
     
-    # 경쟁도별 기본 비율
     COMP_RATIO = {
         '높음': 0.08,
         '중간': 0.05,
@@ -535,7 +534,6 @@ def estimate_business_count(search_volume, comp_idx, region=None):
     base_ratio = COMP_RATIO.get(comp_idx, 0.05)
     estimated = int(search_volume * base_ratio)
     
-    # 지역별 가중치
     REGION_MULTIPLIER = {
         '강남': 1.3, '홍대': 1.3, '잠실': 1.3, '해운대': 1.3,
         '계양': 0.7, '일산': 0.7
@@ -569,7 +567,6 @@ def estimate_reviews(search_volume, comp_idx):
         avg_review = random.randint(30, 70)
         avg_blog = random.randint(10, 25)
     
-    # 경쟁도 보정
     COMP_MULTIPLIER = {'높음': 1.2, '낮음': 0.8}
     multiplier = COMP_MULTIPLIER.get(comp_idx, 1.0)
     
@@ -854,7 +851,6 @@ def generate_insights_v2(analysis, region_data, comp_level=2):
     
     return insights[:5]
 
-
 #############################################
 # 기능 1: 검색량 조회
 #############################################
@@ -958,7 +954,7 @@ def get_related_keywords_api(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 (최종 개선 버전)
+# 기능 3: 광고 단가
 #############################################
 def get_ad_cost(keyword):
     result = get_keyword_data(keyword)
@@ -987,7 +983,6 @@ def get_ad_cost(keyword):
     lines.append(f"└ PC: {format_number(pc_qc)}회 ({100-mobile_ratio}%)")
     lines.append("")
     
-    # 세밀화된 테스트 입찰가
     test_bids = [
         100, 200, 300, 400, 500, 600, 700, 800, 900, 1000,
         1200, 1500, 1800, 2000, 2200, 2500, 3000, 3500, 4000, 5000,
@@ -999,15 +994,12 @@ def get_ad_cost(keyword):
     efficient_bid = None
     efficient_clicks = 0
     efficient_cost = 0
+    daily_budget = 10000
+    unique_selected = []
     
     if mobile_perf.get("success"):
         mobile_estimates = mobile_perf["data"].get("estimate", [])
         valid_estimates = [e for e in mobile_estimates if e.get('clicks', 0) > 0]
-        
-        # 디버깅 로그 (DEBUG 레벨)
-        logger.debug(f"[디버그] {keyword_name} - 총 입찰가 개수: {len(valid_estimates)}")
-        if valid_estimates:
-            logger.debug(f"[디버그] 입찰가 범위: {valid_estimates[0].get('bid')}원 ~ {valid_estimates[-1].get('bid')}원")
         
         if valid_estimates:
             lines.append("━━━━━━━━━━━━━━")
@@ -1017,17 +1009,14 @@ def get_ad_cost(keyword):
             lines.append("입찰가별 예상 성과")
             lines.append("")
             
-            # 최대 클릭수 찾기
             max_clicks = max(e.get('clicks', 0) for e in valid_estimates)
             
-            # 최대 클릭에 처음 도달한 입찰가 찾기
             first_max_bid = None
             for e in sorted(valid_estimates, key=lambda x: x.get('bid', 0)):
                 if e.get('clicks', 0) == max_clicks:
                     first_max_bid = e.get('bid', 0)
                     break
             
-            # 6개 표시할 입찰가 선택
             target_ratios = [0.2, 0.4, 0.6, 0.8, 1.0]
             selected_bids = []
 
@@ -1037,7 +1026,6 @@ def get_ad_cost(keyword):
                             key=lambda x: abs(x.get('clicks', 0) - target_clicks))
                 selected_bids.append(closest)
 
-            # 중복 제거
             seen_bids = set()
             unique_selected = []
             for e in selected_bids:
@@ -1046,7 +1034,6 @@ def get_ad_cost(keyword):
                     seen_bids.add(bid)
                     unique_selected.append(e)
 
-            # 최소 5개 보장 (단, 같은 클릭수는 제외)
             max_clicks_in_selected = max(e.get('clicks', 0) for e in unique_selected) if unique_selected else 0
 
             attempt_count = 0
@@ -1058,11 +1045,9 @@ def get_ad_cost(keyword):
                     if bid in seen_bids:
                         continue
                     
-                    # 최대 클릭은 스킵 (나중에 추가)
                     if clicks == max_clicks_in_selected:
                         continue
                     
-                    # 클릭수 중복 방지
                     if any(e2.get('clicks', 0) == clicks for e2 in unique_selected):
                         continue
                     
@@ -1073,7 +1058,6 @@ def get_ad_cost(keyword):
                     break
                 attempt_count += 1
 
-            # 최대 클릭 1개 추가 (효과 동일 증명용)
             first_max_bid_in_selected = None
             for e in sorted(unique_selected, key=lambda x: x.get('bid', 0)):
                 if e.get('clicks', 0) == max_clicks_in_selected:
@@ -1089,14 +1073,8 @@ def get_ad_cost(keyword):
                     if next_bid.get('bid', 0) not in seen_bids:
                         unique_selected.append(next_bid)
 
-            # 입찰가 순 정렬
             unique_selected.sort(key=lambda x: x.get('bid', 0))
-
-            # 디버깅 (DEBUG 레벨)
-            logger.debug(f"[디버그] 선택된 개수: {len(unique_selected)}")
-            logger.debug(f"[디버그] 클릭수 분포: {[(e.get('bid'), e.get('clicks')) for e in unique_selected]}")
             
-            # 효율 입찰가 설정
             efficient_est = None
             if len(unique_selected) >= 5:
                 efficient_est = unique_selected[4]
@@ -1113,7 +1091,6 @@ def get_ad_cost(keyword):
                 if efficient_cost == 0:
                     efficient_cost = int(efficient_clicks * efficient_bid * 0.8)
             
-            # 출력
             for est in unique_selected:
                 bid = est.get('bid', 0)
                 clicks = est.get('clicks', 0)
@@ -1124,18 +1101,15 @@ def get_ad_cost(keyword):
                 
                 lines.append(f"{format_number(bid)}원 → 월 {clicks}회 클릭 | {format_won(cost)}")
             
-            # 효과 동일 메시지
             if first_max_bid_in_selected:
                 lines.append(f"  ↑ {format_number(first_max_bid_in_selected)}원 이상은 효과 동일")
             
-            # 데이터 부족 경고
             if len(unique_selected) < 5:
                 lines.append("")
                 lines.append("※ 입찰가 데이터 부족으로 일부만 표시")
             
             lines.append("")
     
-    # 추천 입찰가
     if efficient_bid:
         lines.append("━━━━━━━━━━━━━━")
         lines.append("🎯 추천 입찰가")
@@ -1152,7 +1126,6 @@ def get_ad_cost(keyword):
         lines.append(f"└ 일 예산: 약 {format_won(daily_budget)}")
         lines.append("")
         
-        # 대안 제시
         if len(unique_selected) >= 4:
             lower_est = unique_selected[max(0, len(unique_selected) - 3)]
             lower_bid = lower_est.get('bid', 0)
@@ -1167,7 +1140,6 @@ def get_ad_cost(keyword):
         
         lines.append("")
     
-    # PC 예상 성과
     pc_perf = get_performance_estimate(keyword_name, test_bids, 'PC')
     
     if pc_perf.get("success"):
@@ -1192,7 +1164,6 @@ def get_ad_cost(keyword):
             lines.append(f"└ 예상 비용: 월 {format_won(pc_cost)}")
             lines.append("")
     
-    # 운영 가이드
     if efficient_bid:
         lines.append("━━━━━━━━━━━━━━")
         lines.append("📋 운영 가이드")
@@ -1415,7 +1386,7 @@ def format_place_keywords(input_str):
 
 
 #############################################
-# 기능 8: 자동완성
+# 기능 8: 네이버 자동완성
 #############################################
 def get_autocomplete(keyword):
     try:
@@ -1448,42 +1419,266 @@ def get_autocomplete(keyword):
 
 
 #############################################
+# 기능 9: 유튜브 자동완성어 (신규)
+#############################################
+def get_youtube_autocomplete(keyword):
+    """유튜브 자동완성 키워드 수집"""
+    try:
+        url = "https://suggestqueries.google.com/complete/search"
+        params = {
+            "client": "youtube",
+            "ds": "yt",
+            "q": keyword,
+            "hl": "ko",
+            "gl": "kr"
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        
+        response = requests.get(url, params=params, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            text = response.text
+            
+            start_idx = text.find('(')
+            end_idx = text.rfind(')')
+            if start_idx != -1 and end_idx != -1:
+                json_str = text[start_idx + 1:end_idx]
+                data = json.loads(json_str)
+                
+                suggestions = []
+                if len(data) > 1 and isinstance(data[1], list):
+                    for item in data[1]:
+                        if isinstance(item, list) and len(item) > 0:
+                            suggestion = item[0]
+                            if suggestion and suggestion != keyword:
+                                suggestions.append(suggestion)
+                
+                if suggestions:
+                    result = f"[유튜브 자동완성] {keyword}\n\n"
+                    for i, s in enumerate(suggestions[:15], 1):
+                        result += f"{i}. {s}\n"
+                    result += f"\n총 {len(suggestions[:15])}개"
+                    return result
+        
+        return f"[유튜브 자동완성] {keyword}\n\n결과 없음"
+        
+    except Exception as e:
+        logger.error(f"유튜브 자동완성 오류: {str(e)}")
+        return f"[유튜브 자동완성] {keyword}\n\n조회 실패: {str(e)}"
+
+
+#############################################
+# 기능 10: 플레이스 순위 조회 (신규)
+#############################################
+def get_place_ranking(keyword, place_id):
+    """네이버 플레이스에서 특정 업체의 순위 조회"""
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": "https://m.place.naver.com/"
+    }
+    
+    try:
+        search_url = f"https://map.naver.com/v5/api/search?caller=pcweb&query={quote(keyword)}&type=all&page=1&displayCount=100"
+        
+        response = requests.get(search_url, headers=headers, timeout=10)
+        
+        place_ids = []
+        place_names = {}
+        
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                
+                if "result" in data and "place" in data["result"]:
+                    place_list = data["result"]["place"].get("list", [])
+                    for item in place_list:
+                        pid = str(item.get("id", ""))
+                        name = item.get("name", "")
+                        if pid:
+                            place_ids.append(pid)
+                            place_names[pid] = name
+            except:
+                pass
+        
+        if len(place_ids) < 10:
+            mobile_url = f"https://m.search.naver.com/search.naver?where=m_local&query={quote(keyword)}"
+            response2 = requests.get(mobile_url, headers=headers, timeout=10)
+            
+            if response2.status_code == 200:
+                html = response2.text
+                
+                patterns = [
+                    r'place/(\d{7,})',
+                    r'restaurant/(\d{7,})',
+                    r'cafe/(\d{7,})',
+                    r'"id"\s*:\s*"?(\d{7,})"?',
+                    r'data-id="(\d{7,})"'
+                ]
+                
+                for pattern in patterns:
+                    matches = re.findall(pattern, html)
+                    for match in matches:
+                        if match not in place_ids:
+                            place_ids.append(match)
+        
+        seen = set()
+        unique_ids = []
+        for pid in place_ids:
+            if pid not in seen:
+                seen.add(pid)
+                unique_ids.append(pid)
+        
+        place_ids = unique_ids[:100]
+        
+        target_id = str(place_id).strip()
+        
+        if target_id in place_ids:
+            rank = place_ids.index(target_id) + 1
+            place_name = place_names.get(target_id, "")
+            
+            if rank == 1:
+                rank_emoji = "🥇"
+            elif rank == 2:
+                rank_emoji = "🥈"
+            elif rank == 3:
+                rank_emoji = "🥉"
+            elif rank <= 5:
+                rank_emoji = "⭐"
+            elif rank <= 10:
+                rank_emoji = "✅"
+            elif rank <= 20:
+                rank_emoji = "📍"
+            else:
+                rank_emoji = "📌"
+            
+            result = f"[플레이스 순위] {keyword}\n\n"
+            result += f"{rank_emoji} 현재 순위: {rank}위\n\n"
+            result += f"플레이스 ID: {target_id}\n"
+            if place_name:
+                result += f"업체명: {place_name}\n"
+            result += f"\n총 검색 업체: {len(place_ids)}개\n"
+            
+            if rank > 1:
+                result += f"\n▸ 상위 업체\n"
+                start = max(0, rank - 4)
+                for i in range(start, rank - 1):
+                    pid = place_ids[i]
+                    name = place_names.get(pid, pid)
+                    result += f"  {i+1}위: {name[:15]}\n"
+            
+            result += f"\n▸ 내 업체\n"
+            result += f"  ➤ {rank}위: {place_name if place_name else target_id}\n"
+            
+            if rank < len(place_ids):
+                result += f"\n▸ 하위 업체\n"
+                end = min(len(place_ids), rank + 3)
+                for i in range(rank, end):
+                    pid = place_ids[i]
+                    name = place_names.get(pid, pid)
+                    result += f"  {i+1}위: {name[:15]}\n"
+            
+            result += "\n━━━━━━━━━━━━━━\n"
+            if rank <= 3:
+                result += "💡 상위권 유지 중! 리뷰 관리 필수"
+            elif rank <= 10:
+                result += "💡 10위권! 리뷰 10개 추가로 순위 상승 가능"
+            elif rank <= 20:
+                result += "💡 20위권, 블로그+리뷰 병행 필요"
+            else:
+                result += "💡 집중 마케팅 필요 (리뷰/블로그/광고)"
+            
+            return result
+        
+        else:
+            result = f"[플레이스 순위] {keyword}\n\n"
+            result += f"❌ 순위권 외 (100위 밖)\n\n"
+            result += f"플레이스 ID: {target_id}\n"
+            result += f"검색된 업체 수: {len(place_ids)}개\n"
+            result += "\n━━━━━━━━━━━━━━\n"
+            result += "💡 100위 밖은 노출 효과 거의 없음\n"
+            result += "💡 플레이스 광고 또는 리뷰 확보 필요"
+            
+            if place_ids[:5]:
+                result += "\n\n▸ 현재 상위 5개 업체\n"
+                for i, pid in enumerate(place_ids[:5], 1):
+                    name = place_names.get(pid, pid)
+                    result += f"  {i}위: {name[:20]}\n"
+            
+            return result
+    
+    except Exception as e:
+        logger.error(f"순위 조회 오류: {str(e)}")
+        return f"[플레이스 순위] 조회 실패\n\n오류: {str(e)}"
+
+
+def parse_ranking_input(user_input):
+    """순위 조회 입력 파싱: '순위 키워드 플레이스ID'"""
+    
+    text = user_input.strip()
+    if text.startswith("순위 "):
+        text = text[3:].strip()
+    elif text.startswith("순위"):
+        text = text[2:].strip()
+    
+    words = text.split()
+    
+    place_id = None
+    keyword_parts = []
+    
+    for i, word in enumerate(reversed(words)):
+        extracted = extract_place_id_from_url(word)
+        if extracted:
+            place_id = extracted
+            keyword_parts = words[:len(words) - i - 1]
+            break
+        elif word.isdigit() and len(word) >= 7:
+            place_id = word
+            keyword_parts = words[:len(words) - i - 1]
+            break
+    
+    keyword = " ".join(keyword_parts).strip()
+    
+    return keyword, place_id
+
+
+#############################################
 # 도움말
 #############################################
 def get_help():
     return """[사용 가이드]
 
 ▶ 키워드 검색량 (최대 5개)
-방법) 키워드1, 키워드2, 키워드3, 키워드4, 키워드5
-예) 인천맛집,강남맛집,서울맛집,부산맛집,전주맛집
+예) 인천맛집,강남맛집,서울맛집
 
 ▶ 상권분석 (트렌드+매출+고객)
-방법) 상권+키워드
 예) 상권 강남맛집
 
 ▶ 연관 검색어
-방법) 연관+키워드
 예) 연관 인천맛집
 
-▶ 자동완성어
-방법) 자동+키워드
+▶ 자동완성어 (네이버)
 예) 자동 인천맛집
 
-▶ CPC 파워링크 광고 단가
-방법) 광고+키워드
+▶ 유튜브 자동완성어
+예) 유튜브 인천맛집
+
+▶ CPC 광고 단가
 예) 광고 인천맛집
 
 ▶ 대표 키워드
-방법) 대표+플레이스ID
-방법) 대표+플레이스 주소
 예) 대표 12345678
-예) 대표 m.place.naver.com/restaurant/1309812619/home
+
+▶ 플레이스 순위 조회
+예) 순위 부평맛집 12345678
 
 ▶ 재미 기능
-운세 → 운세 870114
-로또 → 로또
-
-기능 추가를 원하시면 소식에 댓글 남겨주세요."""
+예) 운세 870114
+예) 로또"""
 
 
 #############################################
@@ -1561,6 +1756,36 @@ def test_ad():
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
+@app.route('/test-youtube')
+def test_youtube():
+    keyword = request.args.get('q', '부평맛집')
+    result = get_youtube_autocomplete(keyword)
+    
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>유튜브 자동완성 테스트</title></head>
+<body>
+<h2>키워드: {keyword}</h2>
+<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
+</body></html>"""
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+@app.route('/test-ranking')
+def test_ranking():
+    keyword = request.args.get('q', '부평맛집')
+    place_id = request.args.get('id', '1234567890')
+    result = get_place_ranking(keyword, place_id)
+    
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>플레이스 순위 테스트</title></head>
+<body>
+<h2>키워드: {keyword}</h2>
+<h3>플레이스 ID: {place_id}</h3>
+<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
+</body></html>"""
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
 #############################################
 # 카카오 스킬
 #############################################
@@ -1580,9 +1805,11 @@ def kakao_skill():
         
         lower_input = user_utterance.lower()
         
+        # 도움말
         if lower_input in ["도움말", "도움", "사용법", "help", "?", "메뉴"]:
             return create_kakao_response(get_help())
         
+        # 운세
         if lower_input.startswith("운세 "):
             birthdate = ''.join(filter(str.isdigit, user_utterance))
             if birthdate and len(birthdate) in [6, 8]:
@@ -1592,9 +1819,11 @@ def kakao_skill():
         if lower_input in ["운세", "오늘의운세", "오늘운세"]:
             return create_kakao_response(get_fortune())
         
+        # 로또
         if lower_input in ["로또", "로또번호", "lotto"]:
             return create_kakao_response(get_lotto())
         
+        # 상권분석
         if any(lower_input.startswith(cmd) for cmd in ["상권 ", "상세 ", "인사이트 ", "트렌드 "]):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1603,18 +1832,35 @@ def kakao_skill():
                 return create_kakao_response(format_commercial_analysis(analysis))
             return create_kakao_response("예) 상권 부평맛집")
         
+        # 유튜브 자동완성 (신규)
+        if lower_input.startswith("유튜브 ") or lower_input.startswith("yt "):
+            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            if keyword:
+                return create_kakao_response(get_youtube_autocomplete(keyword))
+            return create_kakao_response("예) 유튜브 부평맛집")
+        
+        # 네이버 자동완성
         if lower_input.startswith("자동 ") or lower_input.startswith("자동완성 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
                 return create_kakao_response(get_autocomplete(keyword))
             return create_kakao_response("예) 자동 부평맛집")
         
+        # 플레이스 순위 조회 (신규)
+        if lower_input.startswith("순위 "):
+            keyword, place_id = parse_ranking_input(user_utterance)
+            if keyword and place_id:
+                return create_kakao_response(get_place_ranking(keyword, place_id))
+            return create_kakao_response("예) 순위 부평맛집 1234567890\n예) 순위 강남맛집 place.naver.com/restaurant/12345")
+        
+        # 대표키워드
         if lower_input.startswith("대표 ") or lower_input.startswith("대표키워드 "):
             input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if input_text:
                 return create_kakao_response(format_place_keywords(input_text))
             return create_kakao_response("예) 대표 37838432")
         
+        # 연관 키워드
         if lower_input.startswith("연관 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1622,6 +1868,7 @@ def kakao_skill():
                 return create_kakao_response(get_related_keywords(keyword))
             return create_kakao_response("예) 연관 맛집")
         
+        # 광고 단가
         if lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1629,6 +1876,7 @@ def kakao_skill():
                 return create_kakao_response(get_ad_cost(keyword))
             return create_kakao_response("예) 광고 맛집")
         
+        # 기본: 검색량 조회
         keyword = user_utterance.strip()
         if "," in keyword:
             return create_kakao_response(get_search_volume(keyword))
@@ -1656,7 +1904,6 @@ if __name__ == '__main__':
     print(f"Gemini API: {'✅' if GEMINI_API_KEY else '❌'}")
     print(f"공공데이터 API: {'✅' if DATA_GO_KR_API_KEY else '❌'}")
     
-    # 필수 키 검증
     if validate_required_keys():
         print("✅ 필수 API 키 확인 완료")
     else:
@@ -1664,7 +1911,6 @@ if __name__ == '__main__':
     
     print("====================")
     
-    # 환경에 따라 로그 레벨 조정
     if os.environ.get('PRODUCTION') == 'true':
         logging.basicConfig(level=logging.WARNING)
         logger.setLevel(logging.WARNING)
@@ -1674,3 +1920,4 @@ if __name__ == '__main__':
     
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
