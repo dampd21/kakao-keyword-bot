@@ -326,11 +326,10 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
 # 순위별 입찰가 조회 (Performance API 역산 방식)
 #############################################
 def get_position_bids(keyword):
-    """Performance API로 순위별 입찰가 역산 - 최종 버전"""
+    """Performance API로 순위별 입찰가 역산 - 수정 버전"""
     
     logger.info(f"[입찰가] Performance API로 추정 시작: {keyword}")
     
-    # 넓은 범위의 입찰가 테스트
     test_bids = [
         50, 100, 200, 300, 500, 700, 
         1000, 1300, 1500, 1700, 2000, 2500, 3000, 
@@ -352,23 +351,23 @@ def get_position_bids(keyword):
             logger.error(f"[입찰가] 응답 데이터 없음")
             return {"success": False, "error": "응답 데이터 없음"}
         
-        # 클릭수 기준 정렬
+        # ⭐ 핵심 변경: 입찰가 기준으로 내림차순 정렬 (높은 입찰가 = 1위)
         mobile_sorted = sorted(
             [e for e in mobile_estimates if e.get('clicks', 0) > 0],
-            key=lambda x: x.get('clicks', 0), 
-            reverse=True
+            key=lambda x: x.get('bid', 0),  # ✅ clicks → bid로 변경
+            reverse=True  # 높은 입찰가부터
         )
         
         pc_sorted = sorted(
             [e for e in pc_estimates if e.get('clicks', 0) > 0],
-            key=lambda x: x.get('clicks', 0), 
+            key=lambda x: x.get('bid', 0),  # ✅ clicks → bid로 변경
             reverse=True
         )
         
-        # 상위 5개를 1~5위로 매핑
         mobile_bids = {}
         pc_bids = {}
         
+        # 상위 5개를 1~5위로 매핑 (입찰가 높은 순)
         for i in range(min(5, len(mobile_sorted))):
             mobile_bids[i + 1] = mobile_sorted[i].get('bid', 0)
         
@@ -382,6 +381,7 @@ def get_position_bids(keyword):
                 last_bid = device_bids.get(last_pos, 100) if last_pos > 0 else 100
                 
                 for i in range(last_pos + 1, 6):
+                    # 하위 순위는 더 낮은 입찰가
                     device_bids[i] = max(int(last_bid * (0.7 ** (i - last_pos))), 50)
         
         logger.info(f"[입찰가] 추정 완료 - Mobile: {mobile_bids}, PC: {pc_bids}")
