@@ -30,6 +30,23 @@ DATA_GO_KR_API_KEY = os.environ.get('DATA_GO_KR_API_KEY', '')
 
 
 #############################################
+# 환경변수 검증
+#############################################
+def validate_required_keys():
+    """필수 API 키 검증"""
+    required = {
+        'NAVER_API_KEY': NAVER_API_KEY,
+        'NAVER_SECRET_KEY': NAVER_SECRET_KEY,
+        'NAVER_CUSTOMER_ID': NAVER_CUSTOMER_ID
+    }
+    missing = [k for k, v in required.items() if not v]
+    if missing:
+        logger.warning(f"⚠️  Missing required keys: {', '.join(missing)}")
+        return False
+    return True
+
+
+#############################################
 # 유틸리티 함수
 #############################################
 def format_number(num):
@@ -283,49 +300,96 @@ def get_naver_api_headers(method="GET", uri="/keywordstool"):
         "X-Signature": signature_base64
     }
 
-def get_keyword_data(keyword):
-    if not NAVER_API_KEY or not NAVER_SECRET_KEY or not NAVER_CUSTOMER_ID:
+def get_keyword_data(keyword, retry=2):
+    """키워드 데이터 조회 (재시도 로직 포함)"""
+    if not validate_required_keys():
         return {"success": False, "error": "API 키가 설정되지 않았습니다."}
     
     base_url = "https://api.searchad.naver.com"
     uri = "/keywordstool"
-    headers = get_naver_api_headers("GET", uri)
     params = {"hintKeywords": keyword, "showDetail": "1"}
     
-    try:
-        response = requests.get(base_url + uri, headers=headers, params=params, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            keyword_list = data.get("keywordList", [])
-            if keyword_list:
-                return {"success": True, "data": keyword_list}
-            return {"success": False, "error": "검색 결과가 없습니다."}
-        return {"success": False, "error": f"API 오류 ({response.status_code})"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    for attempt in range(retry + 1):
+        try:
+            headers = get_naver_api_headers("GET", uri)
+            response = requests.get(base_url + uri, headers=headers, params=params, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                keyword_list = data.get("keywordList", [])
+                if keyword_list:
+                    return {"success": True, "data": keyword_list}
+                return {"success": False, "error": "검색 결과가 없습니다."}
+            
+            if attempt < retry:
+                logger.debug(f"재시도 {attempt + 1}/{retry}: {keyword}")
+                time.sleep(0.5)
+                continue
+            
+            return {"success": False, "error": f"API 오류 ({response.status_code})"}
+            
+        except requests.Timeout:
+            if attempt < retry:
+                logger.debug(f"타임아웃 재시도 {attempt + 1}/{retry}")
+                time.sleep(0.5)
+                continue
+            return {"success": False, "error": "요청 시간 초과"}
+        except Exception as e:
+            logger.error(f"키워드 조회 오류: {str(e)}")
+            if attempt < retry:
+                time.sleep(0.5)
+                continue
+            return {"success": False, "error": str(e)}
 
 
 #############################################
 # CPC API
 #############################################
-def get_performance_estimate(keyword, bids, device='MOBILE'):
-    try:
-        uri = '/estimate/performance/keyword'
-        url = f'https://api.searchad.naver.com{uri}'
-        headers = get_naver_api_headers('POST', uri)
-        payload = {"device": device, "keywordplus": False, "key": keyword, "bids": bids if isinstance(bids, list) else [bids]}
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        if response.status_code == 200:
-            return {"success": True, "data": response.json()}
-        return {"success": False, "error": response.text}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+def get_performance_estimate(keyword, bids, device='MOBILE', retry=2):
+    """성과 예측 API (재시도 로직 포함)"""
+    uri = '/estimate/performance/keyword'
+    url = f'https://api.searchad.naver.com{uri}'
+    payload = {
+        "device": device,
+        "keywordplus": False,
+        "key": keyword,
+        "bids": bids if isinstance(bids, list) else [bids]
+    }
+    
+    for attempt in range(retry + 1):
+        try:
+            headers = get_naver_api_headers('POST', uri)
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
+            
+            if response.status_code == 200:
+                return {"success": True, "data": response.json()}
+            
+            if attempt < retry:
+                logger.debug(f"성과 예측 재시도 {attempt + 1}/{retry}")
+                time.sleep(0.5)
+                continue
+            
+            return {"success": False, "error": response.text}
+            
+        except requests.Timeout:
+            if attempt < retry:
+                logger.debug(f"타임아웃 재시도 {attempt + 1}/{retry}")
+                time.sleep(0.5)
+                continue
+            return {"success": False, "error": "요청 시간 초과"}
+        except Exception as e:
+            logger.error(f"성과 예측 오류: {str(e)}")
+            if attempt < retry:
+                time.sleep(0.5)
+                continue
+            return {"success": False, "error": str(e)}
 
 
 #############################################
 # DataLab 트렌드 API
 #############################################
-def get_datalab_trend(keyword):
+def get_datalab_trend(keyword, retry=2):
+    """트렌드 데이터 조회 (재시도 로직 포함)"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         return {"success": False, "error": "DataLab API 키 미설정"}
     
@@ -345,16 +409,34 @@ def get_datalab_trend(keyword):
         "Content-Type": "application/json"
     }
     
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            results = data.get("results", [])
-            if results and results[0].get("data"):
-                return {"success": True, "data": results[0]["data"]}
-        return {"success": False, "error": "트렌드 데이터 없음"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    for attempt in range(retry + 1):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("results", [])
+                if results and results[0].get("data"):
+                    return {"success": True, "data": results[0]["data"]}
+            
+            if attempt < retry:
+                logger.debug(f"트렌드 재시도 {attempt + 1}/{retry}")
+                time.sleep(0.5)
+                continue
+            
+            return {"success": False, "error": "트렌드 데이터 없음"}
+            
+        except requests.Timeout:
+            if attempt < retry:
+                time.sleep(0.5)
+                continue
+            return {"success": False, "error": "요청 시간 초과"}
+        except Exception as e:
+            logger.error(f"트렌드 조회 오류: {str(e)}")
+            if attempt < retry:
+                time.sleep(0.5)
+                continue
+            return {"success": False, "error": str(e)}
 
 
 #############################################
@@ -443,22 +525,24 @@ def get_place_reviews(keyword, max_count=20):
 def estimate_business_count(search_volume, comp_idx, region=None):
     """검색량과 경쟁도를 기반으로 업체 수 추정"""
     
-    base_ratio = 0.05
+    # 경쟁도별 기본 비율
+    COMP_RATIO = {
+        '높음': 0.08,
+        '중간': 0.05,
+        '낮음': 0.03
+    }
     
-    if comp_idx == "높음":
-        base_ratio = 0.08
-    elif comp_idx == "중간":
-        base_ratio = 0.05
-    else:
-        base_ratio = 0.03
-    
+    base_ratio = COMP_RATIO.get(comp_idx, 0.05)
     estimated = int(search_volume * base_ratio)
     
-    if region:
-        if region in ["강남", "홍대", "잠실", "해운대"]:
-            estimated = int(estimated * 1.3)
-        elif region in ["계양", "일산"]:
-            estimated = int(estimated * 0.7)
+    # 지역별 가중치
+    REGION_MULTIPLIER = {
+        '강남': 1.3, '홍대': 1.3, '잠실': 1.3, '해운대': 1.3,
+        '계양': 0.7, '일산': 0.7
+    }
+    
+    if region and region in REGION_MULTIPLIER:
+        estimated = int(estimated * REGION_MULTIPLIER[region])
     
     min_count = max(estimated - int(estimated * 0.2), 100)
     max_count = estimated + int(estimated * 0.2)
@@ -485,12 +569,12 @@ def estimate_reviews(search_volume, comp_idx):
         avg_review = random.randint(30, 70)
         avg_blog = random.randint(10, 25)
     
-    if comp_idx == "높음":
-        avg_review = int(avg_review * 1.2)
-        avg_blog = int(avg_blog * 1.2)
-    elif comp_idx == "낮음":
-        avg_review = int(avg_review * 0.8)
-        avg_blog = int(avg_blog * 0.8)
+    # 경쟁도 보정
+    COMP_MULTIPLIER = {'높음': 1.2, '낮음': 0.8}
+    multiplier = COMP_MULTIPLIER.get(comp_idx, 1.0)
+    
+    avg_review = int(avg_review * multiplier)
+    avg_blog = int(avg_blog * multiplier)
     
     return {"avg_review": avg_review, "avg_blog": avg_blog}
 
@@ -920,10 +1004,10 @@ def get_ad_cost(keyword):
         mobile_estimates = mobile_perf["data"].get("estimate", [])
         valid_estimates = [e for e in mobile_estimates if e.get('clicks', 0) > 0]
         
-        # 디버깅 로그
-        logger.info(f"[디버그] {keyword_name} - 총 입찰가 개수: {len(valid_estimates)}")
+        # 디버깅 로그 (DEBUG 레벨)
+        logger.debug(f"[디버그] {keyword_name} - 총 입찰가 개수: {len(valid_estimates)}")
         if valid_estimates:
-            logger.info(f"[디버그] 입찰가 범위: {valid_estimates[0].get('bid')}원 ~ {valid_estimates[-1].get('bid')}원")
+            logger.debug(f"[디버그] 입찰가 범위: {valid_estimates[0].get('bid')}원 ~ {valid_estimates[-1].get('bid')}원")
         
         if valid_estimates:
             lines.append("━━━━━━━━━━━━━━")
@@ -962,7 +1046,7 @@ def get_ad_cost(keyword):
                     seen_bids.add(bid)
                     unique_selected.append(e)
 
-            # ⭐ 최소 5개 보장 (단, 같은 클릭수는 제외)
+            # 최소 5개 보장 (단, 같은 클릭수는 제외)
             max_clicks_in_selected = max(e.get('clicks', 0) for e in unique_selected) if unique_selected else 0
 
             attempt_count = 0
@@ -974,7 +1058,7 @@ def get_ad_cost(keyword):
                     if bid in seen_bids:
                         continue
                     
-                    # ⭐ 최대 클릭은 스킵 (나중에 추가)
+                    # 최대 클릭은 스킵 (나중에 추가)
                     if clicks == max_clicks_in_selected:
                         continue
                     
@@ -989,17 +1073,17 @@ def get_ad_cost(keyword):
                     break
                 attempt_count += 1
 
-            # ⭐ 최대 클릭 1개 추가 (효과 동일 증명용)
-            first_max_bid = None
+            # 최대 클릭 1개 추가 (효과 동일 증명용)
+            first_max_bid_in_selected = None
             for e in sorted(unique_selected, key=lambda x: x.get('bid', 0)):
                 if e.get('clicks', 0) == max_clicks_in_selected:
-                    first_max_bid = e.get('bid', 0)
+                    first_max_bid_in_selected = e.get('bid', 0)
                     break
 
-            if first_max_bid:
+            if first_max_bid_in_selected:
                 candidates = [e for e in valid_estimates 
                             if e.get('clicks', 0) == max_clicks_in_selected
-                            and e.get('bid', 0) > first_max_bid]
+                            and e.get('bid', 0) > first_max_bid_in_selected]
                 if candidates:
                     next_bid = min(candidates, key=lambda x: x.get('bid', 0))
                     if next_bid.get('bid', 0) not in seen_bids:
@@ -1008,11 +1092,11 @@ def get_ad_cost(keyword):
             # 입찰가 순 정렬
             unique_selected.sort(key=lambda x: x.get('bid', 0))
 
-            # ⭐ 디버깅
-            logger.info(f"[디버그] 선택된 개수: {len(unique_selected)}")
-            logger.info(f"[디버그] 클릭수 분포: {[(e.get('bid'), e.get('clicks')) for e in unique_selected]}")
+            # 디버깅 (DEBUG 레벨)
+            logger.debug(f"[디버그] 선택된 개수: {len(unique_selected)}")
+            logger.debug(f"[디버그] 클릭수 분포: {[(e.get('bid'), e.get('clicks')) for e in unique_selected]}")
             
-            # ⭐ 효율 입찰가 설정
+            # 효율 입찰가 설정
             efficient_est = None
             if len(unique_selected) >= 5:
                 efficient_est = unique_selected[4]
@@ -1041,8 +1125,8 @@ def get_ad_cost(keyword):
                 lines.append(f"{format_number(bid)}원 → 월 {clicks}회 클릭 | {format_won(cost)}")
             
             # 효과 동일 메시지
-            if first_max_bid:
-                lines.append(f"  ↑ {format_number(first_max_bid)}원 이상은 효과 동일")
+            if first_max_bid_in_selected:
+                lines.append(f"  ↑ {format_number(first_max_bid_in_selected)}원 이상은 효과 동일")
             
             # 데이터 부족 경고
             if len(unique_selected) < 5:
@@ -1051,7 +1135,7 @@ def get_ad_cost(keyword):
             
             lines.append("")
     
-    # ▶ 추천 입찰가
+    # 추천 입찰가
     if efficient_bid:
         lines.append("━━━━━━━━━━━━━━")
         lines.append("🎯 추천 입찰가")
@@ -1083,7 +1167,7 @@ def get_ad_cost(keyword):
         
         lines.append("")
     
-    # ▶ PC 예상 성과
+    # PC 예상 성과
     pc_perf = get_performance_estimate(keyword_name, test_bids, 'PC')
     
     if pc_perf.get("success"):
@@ -1108,7 +1192,7 @@ def get_ad_cost(keyword):
             lines.append(f"└ 예상 비용: 월 {format_won(pc_cost)}")
             lines.append("")
     
-    # ▶ 운영 가이드
+    # 운영 가이드
     if efficient_bid:
         lines.append("━━━━━━━━━━━━━━")
         lines.append("📋 운영 가이드")
@@ -1571,7 +1655,22 @@ if __name__ == '__main__':
     print(f"DataLab API: {'✅' if NAVER_CLIENT_ID else '❌'}")
     print(f"Gemini API: {'✅' if GEMINI_API_KEY else '❌'}")
     print(f"공공데이터 API: {'✅' if DATA_GO_KR_API_KEY else '❌'}")
+    
+    # 필수 키 검증
+    if validate_required_keys():
+        print("✅ 필수 API 키 확인 완료")
+    else:
+        print("⚠️  일부 기능이 제한될 수 있습니다")
+    
     print("====================")
+    
+    # 환경에 따라 로그 레벨 조정
+    if os.environ.get('PRODUCTION') == 'true':
+        logging.basicConfig(level=logging.WARNING)
+        logger.setLevel(logging.WARNING)
+        print("운영 모드: WARNING 레벨 로그")
+    else:
+        print("개발 모드: INFO 레벨 로그")
     
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
