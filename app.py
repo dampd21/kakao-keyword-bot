@@ -1470,10 +1470,10 @@ def get_youtube_autocomplete(keyword):
 
 
 #############################################
-# 기능 10: 플레이스 순위 조회 (신규)
+# 기능 10: 플레이스 순위 조회 (광고 제외, 300위까지)
 #############################################
 def get_place_ranking(keyword, place_id):
-    """네이버 플레이스에서 특정 업체의 순위 조회"""
+    """네이버 플레이스에서 특정 업체의 순위 조회 (광고 제외, 300위까지)"""
     
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
@@ -1482,50 +1482,95 @@ def get_place_ranking(keyword, place_id):
         "Referer": "https://m.place.naver.com/"
     }
     
+    place_ids = []
+    place_names = {}
+    
     try:
-        search_url = f"https://map.naver.com/v5/api/search?caller=pcweb&query={quote(keyword)}&type=all&page=1&displayCount=100"
-        
-        response = requests.get(search_url, headers=headers, timeout=10)
-        
-        place_ids = []
-        place_names = {}
-        
-        if response.status_code == 200:
-            try:
-                data = response.json()
-                
-                if "result" in data and "place" in data["result"]:
-                    place_list = data["result"]["place"].get("list", [])
-                    for item in place_list:
-                        pid = str(item.get("id", ""))
-                        name = item.get("name", "")
-                        if pid:
-                            place_ids.append(pid)
-                            place_names[pid] = name
-            except:
-                pass
-        
-        if len(place_ids) < 10:
-            mobile_url = f"https://m.search.naver.com/search.naver?where=m_local&query={quote(keyword)}"
-            response2 = requests.get(mobile_url, headers=headers, timeout=10)
+        # 페이지별로 조회 (1페이지당 약 50개, 6페이지 = 300개)
+        for page in range(1, 7):
+            search_url = f"https://map.naver.com/v5/api/search?caller=pcweb&query={quote(keyword)}&type=all&page={page}&displayCount=50"
             
-            if response2.status_code == 200:
-                html = response2.text
+            response = requests.get(search_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    
+                    if "result" in data and "place" in data["result"]:
+                        place_list = data["result"]["place"].get("list", [])
+                        
+                        if not place_list:
+                            break  # 더 이상 결과 없음
+                        
+                        for item in place_list:
+                            # 광고 제외 (isAd, isAdPlace, ad 관련 필드 체크)
+                            is_ad = (
+                                item.get("isAd") == True or
+                                item.get("isAdPlace") == True or
+                                item.get("ad") == True or
+                                item.get("type") == "ad" or
+                                item.get("adType") is not None or
+                                "ad" in str(item.get("category", "")).lower() or
+                                item.get("isAdvertisement") == True
+                            )
+                            
+                            if is_ad:
+                                continue  # 광고는 스킵
+                            
+                            pid = str(item.get("id", ""))
+                            name = item.get("name", "")
+                            if pid and pid not in place_ids:
+                                place_ids.append(pid)
+                                place_names[pid] = name
                 
-                patterns = [
-                    r'place/(\d{7,})',
-                    r'restaurant/(\d{7,})',
-                    r'cafe/(\d{7,})',
-                    r'"id"\s*:\s*"?(\d{7,})"?',
-                    r'data-id="(\d{7,})"'
-                ]
-                
-                for pattern in patterns:
-                    matches = re.findall(pattern, html)
-                    for match in matches:
-                        if match not in place_ids:
-                            place_ids.append(match)
+                except json.JSONDecodeError:
+                    pass
+            
+            # API 부하 방지
+            if page < 6:
+                time.sleep(0.2)
         
+        # 모바일 검색으로 추가 수집 (광고 제외)
+        if len(place_ids) < 100:
+            for page in range(1, 4):
+                start = (page - 1) * 50 + 1
+                mobile_url = f"https://m.search.naver.com/search.naver?where=m_local&query={quote(keyword)}&start={start}"
+                response2 = requests.get(mobile_url, headers=headers, timeout=10)
+                
+                if response2.status_code == 200:
+                    html = response2.text
+                    
+                    # 광고 영역 제거
+                    # 광고는 보통 특정 클래스나 data-ad 속성으로 구분
+                    # 광고가 아닌 일반 결과에서만 ID 추출
+                    
+                    # 광고 영역 패턴 (제외할 부분)
+                    ad_patterns = [
+                        r'data-ad-area.*?(?=data-cr-area|$)',
+                        r'class="[^"]*ad[^"]*".*?(?=class="|$)',
+                        r'광고\s*</span>.*?(?=</li>|</div>)',
+                    ]
+                    
+                    clean_html = html
+                    for ad_pattern in ad_patterns:
+                        clean_html = re.sub(ad_pattern, '', clean_html, flags=re.DOTALL | re.IGNORECASE)
+                    
+                    # 일반 결과에서만 ID 추출
+                    patterns = [
+                        r'place/(\d{7,})',
+                        r'restaurant/(\d{7,})',
+                        r'cafe/(\d{7,})',
+                    ]
+                    
+                    for pattern in patterns:
+                        matches = re.findall(pattern, clean_html)
+                        for match in matches:
+                            if match not in place_ids:
+                                place_ids.append(match)
+                
+                time.sleep(0.2)
+        
+        # 중복 제거 및 300개 제한
         seen = set()
         unique_ids = []
         for pid in place_ids:
@@ -1533,7 +1578,7 @@ def get_place_ranking(keyword, place_id):
                 seen.add(pid)
                 unique_ids.append(pid)
         
-        place_ids = unique_ids[:100]
+        place_ids = unique_ids[:300]
         
         target_id = str(place_id).strip()
         
@@ -1553,22 +1598,25 @@ def get_place_ranking(keyword, place_id):
                 rank_emoji = "✅"
             elif rank <= 20:
                 rank_emoji = "📍"
-            else:
+            elif rank <= 50:
                 rank_emoji = "📌"
+            else:
+                rank_emoji = "🔍"
             
             result = f"[플레이스 순위] {keyword}\n\n"
-            result += f"{rank_emoji} 현재 순위: {rank}위\n\n"
+            result += f"{rank_emoji} 현재 순위: {rank}위 (광고제외)\n\n"
             result += f"플레이스 ID: {target_id}\n"
             if place_name:
                 result += f"업체명: {place_name}\n"
             result += f"\n총 검색 업체: {len(place_ids)}개\n"
             
+            # 주변 순위 표시
             if rank > 1:
                 result += f"\n▸ 상위 업체\n"
                 start = max(0, rank - 4)
                 for i in range(start, rank - 1):
                     pid = place_ids[i]
-                    name = place_names.get(pid, pid)
+                    name = place_names.get(pid, pid[:10])
                     result += f"  {i+1}위: {name[:15]}\n"
             
             result += f"\n▸ 내 업체\n"
@@ -1579,7 +1627,7 @@ def get_place_ranking(keyword, place_id):
                 end = min(len(place_ids), rank + 3)
                 for i in range(rank, end):
                     pid = place_ids[i]
-                    name = place_names.get(pid, pid)
+                    name = place_names.get(pid, pid[:10])
                     result += f"  {i+1}위: {name[:15]}\n"
             
             result += "\n━━━━━━━━━━━━━━\n"
@@ -1589,24 +1637,28 @@ def get_place_ranking(keyword, place_id):
                 result += "💡 10위권! 리뷰 10개 추가로 순위 상승 가능"
             elif rank <= 20:
                 result += "💡 20위권, 블로그+리뷰 병행 필요"
+            elif rank <= 50:
+                result += "💡 50위권, 적극적 마케팅 필요"
+            elif rank <= 100:
+                result += "💡 100위권, 리뷰/블로그/광고 병행 권장"
             else:
-                result += "💡 집중 마케팅 필요 (리뷰/블로그/광고)"
+                result += "💡 하위권, 집중 마케팅 필요"
             
             return result
         
         else:
             result = f"[플레이스 순위] {keyword}\n\n"
-            result += f"❌ 순위권 외 (100위 밖)\n\n"
+            result += f"❌ 순위권 외 (300위 밖)\n\n"
             result += f"플레이스 ID: {target_id}\n"
-            result += f"검색된 업체 수: {len(place_ids)}개\n"
+            result += f"검색된 업체 수: {len(place_ids)}개 (광고제외)\n"
             result += "\n━━━━━━━━━━━━━━\n"
-            result += "💡 100위 밖은 노출 효과 거의 없음\n"
-            result += "💡 플레이스 광고 또는 리뷰 확보 필요"
+            result += "💡 300위 밖은 노출 효과 거의 없음\n"
+            result += "💡 플레이스 광고 또는 대규모 리뷰 확보 필요"
             
             if place_ids[:5]:
                 result += "\n\n▸ 현재 상위 5개 업체\n"
                 for i, pid in enumerate(place_ids[:5], 1):
-                    name = place_names.get(pid, pid)
+                    name = place_names.get(pid, pid[:10])
                     result += f"  {i}위: {name[:20]}\n"
             
             return result
@@ -1653,32 +1705,45 @@ def get_help():
     return """[사용 가이드]
 
 ▶ 키워드 검색량 (최대 5개)
-예) 인천맛집,강남맛집,서울맛집
+방법) 키워드1, 키워드2, 키워드3, 키워드4, 키워드5
+예) 인천맛집,강남맛집,서울맛집,부산맛집,전주맛집
 
 ▶ 상권분석 (트렌드+매출+고객)
+방법) 상권+키워드
 예) 상권 강남맛집
 
 ▶ 연관 검색어
+방법) 연관+키워드
 예) 연관 인천맛집
 
 ▶ 자동완성어 (네이버)
+방법) 자동+키워드
 예) 자동 인천맛집
 
-▶ 유튜브 자동완성어
+▶ 자동완성어 (유튜브)
+방법) 유튜브+키워드
 예) 유튜브 인천맛집
 
-▶ CPC 광고 단가
+▶ 파워링크 CPC 광고 단가
+방법) 광고+키워드
 예) 광고 인천맛집
 
 ▶ 대표 키워드
+방법) 대표+플레이스ID
+방법) 대표+플레이스 URL주소
 예) 대표 12345678
+예) 대표 m.place.naver.com/restaurant/1309812619/home
 
-▶ 플레이스 순위 조회
+▶ 플레이스 순위 조회 (광고제외)
+방법) 순위+키워드+플레이스ID
 예) 순위 부평맛집 12345678
+예) 순위 강남맛집 1309812619
 
 ▶ 재미 기능
-예) 운세 870114
-예) 로또"""
+운세 → 운세 870114
+로또 → 로또
+
+기능 추가를 원하시면 소식에 댓글 남겨주세요."""
 
 
 #############################################
