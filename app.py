@@ -1354,14 +1354,6 @@ def get_lotto_fallback():
 def get_place_detail(place_id):
     """플레이스 상세 정보 통합 조회"""
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Referer": "https://m.place.naver.com/"
-    }
-    
     place_id = str(place_id).strip()
     
     result = {
@@ -1375,158 +1367,233 @@ def get_place_detail(place_id):
         "keywords": []
     }
     
-    # ✅ 유틸리티 함수: 깨진 인코딩 복구
-    def fix_encoding(text):
-        """Latin-1로 잘못 읽힌 UTF-8 문자열 복구"""
-        if not text:
-            return text
-        try:
-            # 이미 제대로 된 한글이면 그대로 반환
-            if any('\uac00' <= c <= '\ud7a3' for c in text):
-                return text
-            # Latin-1 -> UTF-8 변환
-            return text.encode('latin1').decode('utf-8')
-        except:
-            try:
-                # ISO-8859-1 -> UTF-8 시도
-                return text.encode('iso-8859-1').decode('utf-8')
-            except:
-                return text
-    
     # 여러 카테고리로 시도
     for category in ['restaurant', 'place', 'cafe', 'hospital', 'beauty', 'accommodation']:
         try:
             url = f"https://m.place.naver.com/{category}/{place_id}/home"
             
-            # ✅ 인코딩 명시적 처리
-            response = requests.get(url, headers=headers, timeout=10)
-            response.encoding = 'utf-8'  # UTF-8 강제 지정
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Referer": "https://m.place.naver.com/"
+            }
             
-            if response.status_code == 200:
-                html = response.text
-                
-                # ✅ 1. JSON 블록에서 데이터 추출 (가장 정확)
-                json_patterns = [
-                    r'window\.__APOLLO_STATE__\s*=\s*({.*?});',
-                    r'<script id="__NEXT_DATA__"[^>]*>({.*?})</script>',
-                ]
-                
-                for json_pattern in json_patterns:
-                    json_match = re.search(json_pattern, html, re.DOTALL)
-                    if json_match:
-                        try:
-                            data = json.loads(json_match.group(1))
-                            
-                            # ROOT_QUERY나 Place 객체 찾기
-                            for key, value in data.items():
-                                if not isinstance(value, dict):
-                                    continue
-                                
-                                # 업체명
-                                if 'name' in value and value['name'] and not result['name']:
-                                    result['name'] = fix_encoding(value['name'])
-                                
-                                # 카테고리
-                                if 'category' in value and value['category'] and not result['category']:
-                                    result['category'] = fix_encoding(value['category'])
-                                
-                                # 저장 수
-                                if 'saveCount' in value:
-                                    result['save_count'] = int(value['saveCount'])
-                                elif 'bookmarkCount' in value:
-                                    result['save_count'] = int(value['bookmarkCount'])
-                                
-                                # 방문자 리뷰
-                                if 'visitorReviewCount' in value:
-                                    result['review_count'] = int(value['visitorReviewCount'])
-                                elif 'visitorReview' in value and isinstance(value['visitorReview'], dict):
-                                    result['review_count'] = int(value['visitorReview'].get('total', 0))
-                                
-                                # 블로그 리뷰
-                                if 'blogReviewCount' in value:
-                                    result['blog_count'] = int(value['blogReviewCount'])
-                                elif 'blogReview' in value and isinstance(value['blogReview'], dict):
-                                    result['blog_count'] = int(value['blogReview'].get('total', 0))
-                                
-                                # 대표 키워드
-                                if 'keywordList' in value and isinstance(value['keywordList'], list):
-                                    result['keywords'] = [fix_encoding(k) for k in value['keywordList'] if k]
-                                
-                                # tags 필드도 체크
-                                if 'tags' in value and isinstance(value['tags'], list):
-                                    if not result['keywords']:
-                                        result['keywords'] = [fix_encoding(tag) for tag in value['tags'] if tag]
-                        
-                        except Exception as e:
-                            logger.debug(f"JSON 파싱 오류: {e}")
-                
-                # ✅ 2. 정규표현식 Fallback
-                if not result['name']:
-                    name_patterns = [
-                        r'<meta property="og:title" content="([^"]+)"',
-                        r'"name"\s*:\s*"([^"]+)"',
-                        r'<h1[^>]*class="[^"]*GHAhO[^"]*"[^>]*>([^<]+)</h1>',
-                        r'<span class="[^"]*Fc1rA[^"]*">([^<]+)</span>',
-                    ]
-                    for pattern in name_patterns:
-                        match = re.search(pattern, html)
-                        if match:
-                            result['name'] = fix_encoding(match.group(1).strip())
-                            if result['name']:
-                                break
-                
-                if not result['category']:
-                    cat_patterns = [
-                        r'<meta property="business:contact_data:street_address" content="([^"]*)".*?<span class="[^"]*DJJvD[^"]*">([^<]+)</span>',
-                        r'<span class="[^"]*DJJvD[^"]*">([^<]+)</span>',
-                        r'"category"\s*:\s*"([^"]+)"',
-                    ]
-                    for pattern in cat_patterns:
-                        match = re.search(pattern, html)
-                        if match:
-                            cat_text = match.group(1) if match.lastindex == 1 else match.group(2)
-                            result['category'] = fix_encoding(cat_text.strip())
-                            if result['category']:
-                                break
-                
-                # 저장/리뷰 수 (숫자는 인코딩 문제 없음)
-                if result['save_count'] == 0:
-                    save_match = re.search(r'저장\s*([0-9,]+)', html)
-                    if save_match:
-                        result['save_count'] = int(save_match.group(1).replace(',', ''))
-                
-                if result['review_count'] == 0:
-                    review_match = re.search(r'방문자리뷰\s*([0-9,]+)', html)
-                    if review_match:
-                        result['review_count'] = int(review_match.group(1).replace(',', ''))
-                
-                if result['blog_count'] == 0:
-                    blog_match = re.search(r'블로그리뷰\s*([0-9,]+)', html)
-                    if blog_match:
-                        result['blog_count'] = int(blog_match.group(1).replace(',', ''))
-                
-                # 대표 키워드
-                if not result['keywords']:
-                    # HTML에서 키워드 추출
-                    kw_patterns = [
-                        r'<a[^>]*class="[^"]*place_keyword[^"]*"[^>]*>([^<]+)</a>',
-                        r'<span class="[^"]*_3XamX[^"]*">([^<]+)</span>',
-                    ]
-                    for pattern in kw_patterns:
-                        matches = re.findall(pattern, html)
-                        if matches:
-                            result['keywords'] = [fix_encoding(kw.strip()) for kw in matches[:10] if kw.strip()]
-                            break
-                
-                # 성공 판단
-                if result["name"] or result["save_count"] > 0 or result["keywords"]:
-                    result["success"] = True
-                    logger.info(f"✅ 플레이스 조회 성공: {place_id} ({category})")
-                    return result
+            response = requests.get(url, headers=headers, timeout=15)
+            
+            if response.status_code != 200:
+                continue
+            
+            # ✅ 핵심: 바이트로 받아서 UTF-8로 직접 디코딩
+            try:
+                html = response.content.decode('utf-8')
+            except UnicodeDecodeError:
+                html = response.content.decode('utf-8', errors='ignore')
+            
+            # ✅ 방법 1: __NEXT_DATA__ 에서 추출 (가장 정확)
+            next_data_match = re.search(
+                r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>',
+                html, re.DOTALL
+            )
+            
+            if next_data_match:
+                try:
+                    json_text = next_data_match.group(1)
+                    next_data = json.loads(json_text)
                     
+                    # props > pageProps > initialState > place > detail 경로 탐색
+                    def find_place_data(obj, depth=0):
+                        if depth > 10:
+                            return None
+                        if isinstance(obj, dict):
+                            # 직접 place 데이터인지 확인
+                            if 'name' in obj and 'saveCount' in obj:
+                                return obj
+                            if 'name' in obj and 'visitorReviewCount' in obj:
+                                return obj
+                            if 'basicInfo' in obj:
+                                return obj.get('basicInfo')
+                            
+                            # 하위 탐색
+                            for key, value in obj.items():
+                                found = find_place_data(value, depth + 1)
+                                if found:
+                                    return found
+                        elif isinstance(obj, list):
+                            for item in obj:
+                                found = find_place_data(item, depth + 1)
+                                if found:
+                                    return found
+                        return None
+                    
+                    place_data = find_place_data(next_data)
+                    
+                    if place_data:
+                        result['name'] = place_data.get('name', '')
+                        result['category'] = place_data.get('category', '')
+                        result['save_count'] = int(place_data.get('saveCount', 0) or 0)
+                        result['review_count'] = int(place_data.get('visitorReviewCount', 0) or 0)
+                        result['blog_count'] = int(place_data.get('blogReviewCount', 0) or 0)
+                        
+                        # 키워드
+                        keywords = place_data.get('keywords') or place_data.get('keywordList') or []
+                        if keywords:
+                            result['keywords'] = [k for k in keywords if k][:10]
+                        
+                        if result['name']:
+                            result['success'] = True
+                            logger.info(f"✅ NEXT_DATA에서 추출 성공: {place_id}")
+                            return result
+                
+                except json.JSONDecodeError as e:
+                    logger.debug(f"NEXT_DATA JSON 파싱 실패: {e}")
+            
+            # ✅ 방법 2: HTML에서 직접 정규식으로 추출
+            # 업체명
+            if not result['name']:
+                name_patterns = [
+                    r'"name"\s*:\s*"([^"]+)"',
+                    r'<title>([^<]+?)(?:\s*:|\s*-|\s*\|)',
+                    r'property="og:title"\s+content="([^"]+)"',
+                ]
+                for pattern in name_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        name = match.group(1).strip()
+                        if name and len(name) < 50 and '네이버' not in name:
+                            result['name'] = name
+                            break
+            
+            # 카테고리
+            if not result['category']:
+                cat_match = re.search(r'"category"\s*:\s*"([^"]+)"', html)
+                if cat_match:
+                    result['category'] = cat_match.group(1)
+            
+            # 저장 수
+            if result['save_count'] == 0:
+                save_patterns = [
+                    r'"saveCount"\s*:\s*(\d+)',
+                    r'"bookmarkCount"\s*:\s*(\d+)',
+                    r'저장\s*</span>\s*<span[^>]*>(\d[\d,]*)',
+                    r'저장\s*(\d[\d,]*)',
+                ]
+                for pattern in save_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        try:
+                            result['save_count'] = int(match.group(1).replace(',', ''))
+                            break
+                        except:
+                            pass
+            
+            # 방문자 리뷰
+            if result['review_count'] == 0:
+                review_patterns = [
+                    r'"visitorReviewCount"\s*:\s*(\d+)',
+                    r'"visitorReviewTotal"\s*:\s*(\d+)',
+                    r'방문자리뷰\s*</span>\s*<span[^>]*>(\d[\d,]*)',
+                    r'방문자리뷰\s*(\d[\d,]*)',
+                ]
+                for pattern in review_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        try:
+                            result['review_count'] = int(match.group(1).replace(',', ''))
+                            break
+                        except:
+                            pass
+            
+            # 블로그 리뷰
+            if result['blog_count'] == 0:
+                blog_patterns = [
+                    r'"blogReviewCount"\s*:\s*(\d+)',
+                    r'"blogReviewTotal"\s*:\s*(\d+)',
+                    r'블로그리뷰\s*</span>\s*<span[^>]*>(\d[\d,]*)',
+                    r'블로그리뷰\s*(\d[\d,]*)',
+                ]
+                for pattern in blog_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        try:
+                            result['blog_count'] = int(match.group(1).replace(',', ''))
+                            break
+                        except:
+                            pass
+            
+            # 키워드
+            if not result['keywords']:
+                kw_patterns = [
+                    r'"keywords"\s*:\s*\[([^\]]+)\]',
+                    r'"keywordList"\s*:\s*\[([^\]]+)\]',
+                    r'"representKeywords"\s*:\s*\[([^\]]+)\]',
+                ]
+                for pattern in kw_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        try:
+                            kw_str = match.group(1)
+                            keywords = re.findall(r'"([^"]+)"', kw_str)
+                            keywords = [k for k in keywords if k and len(k) < 30]
+                            if keywords:
+                                result['keywords'] = keywords[:10]
+                                break
+                        except:
+                            pass
+            
+            # 성공 판단
+            if result["name"] or result["save_count"] > 0 or result["review_count"] > 0:
+                result["success"] = True
+                logger.info(f"✅ HTML 정규식으로 추출 성공: {place_id}")
+                return result
+                    
+        except requests.Timeout:
+            logger.debug(f"타임아웃 ({category})")
+            continue
         except Exception as e:
             logger.debug(f"상세 조회 실패 ({category}): {str(e)}")
             continue
+    
+    # ✅ 방법 3: API 직접 호출 시도
+    try:
+        api_url = f"https://m.place.naver.com/api/place/home?id={place_id}&lang=ko"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+            "Accept": "application/json",
+            "Referer": f"https://m.place.naver.com/place/{place_id}/home"
+        }
+        
+        api_response = requests.get(api_url, headers=headers, timeout=10)
+        
+        if api_response.status_code == 200:
+            try:
+                api_data = api_response.json()
+                
+                if 'basicInfo' in api_data:
+                    basic = api_data['basicInfo']
+                    result['name'] = basic.get('name', '')
+                    result['category'] = basic.get('category', '')
+                
+                if 'summary' in api_data:
+                    summary = api_data['summary']
+                    result['save_count'] = int(summary.get('saveCount', 0) or 0)
+                    result['review_count'] = int(summary.get('visitorReviewCount', 0) or 0)
+                    result['blog_count'] = int(summary.get('blogReviewCount', 0) or 0)
+                
+                if 'keywords' in api_data:
+                    result['keywords'] = api_data['keywords'][:10]
+                
+                if result['name']:
+                    result['success'] = True
+                    logger.info(f"✅ API로 추출 성공: {place_id}")
+                    return result
+                    
+            except:
+                pass
+    except:
+        pass
     
     logger.warning(f"❌ 플레이스 조회 실패: {place_id}")
     return result
