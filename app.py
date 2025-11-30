@@ -944,21 +944,15 @@ def get_ad_cost(keyword):
                     break
             
             # 6개 표시할 입찰가 선택
-            target_ratios = [0.2, 0.4, 0.6, 0.8, 1.0, 1.0]
+            target_ratios = [0.2, 0.4, 0.6, 0.8, 1.0]
             selected_bids = []
-            
+
             for i, ratio in enumerate(target_ratios):
                 target_clicks = int(max_clicks * ratio)
-                
-                if i == 5:
-                    # 6번째는 나중에 처리
-                    pass
-                else:
-                    # 목표 클릭에 가장 가까운 입찰가
-                    closest = min(valid_estimates, 
-                                key=lambda x: abs(x.get('clicks', 0) - target_clicks))
-                    selected_bids.append(closest)
-            
+                closest = min(valid_estimates, 
+                            key=lambda x: abs(x.get('clicks', 0) - target_clicks))
+                selected_bids.append(closest)
+
             # 중복 제거
             seen_bids = set()
             unique_selected = []
@@ -967,10 +961,12 @@ def get_ad_cost(keyword):
                 if bid not in seen_bids:
                     seen_bids.add(bid)
                     unique_selected.append(e)
-            
-            # ⭐ 최소 6개 보장 (다양성 확보)
+
+            # ⭐ 최소 5개 보장 (단, 같은 클릭수는 제외)
+            max_clicks_in_selected = max(e.get('clicks', 0) for e in unique_selected) if unique_selected else 0
+
             attempt_count = 0
-            while len(unique_selected) < 6 and attempt_count < len(valid_estimates):
+            while len(unique_selected) < 5 and attempt_count < len(valid_estimates):
                 for e in sorted(valid_estimates, key=lambda x: x.get('bid', 0)):
                     bid = e.get('bid', 0)
                     clicks = e.get('clicks', 0)
@@ -978,10 +974,13 @@ def get_ad_cost(keyword):
                     if bid in seen_bids:
                         continue
                     
-                    # 5개 미만일 때는 클릭수 중복 방지
-                    if len(unique_selected) < 5:
-                        if any(e2.get('clicks', 0) == clicks for e2 in unique_selected):
-                            continue
+                    # ⭐ 최대 클릭은 스킵 (나중에 추가)
+                    if clicks == max_clicks_in_selected:
+                        continue
+                    
+                    # 클릭수 중복 방지
+                    if any(e2.get('clicks', 0) == clicks for e2 in unique_selected):
+                        continue
                     
                     unique_selected.append(e)
                     seen_bids.add(bid)
@@ -989,39 +988,29 @@ def get_ad_cost(keyword):
                 else:
                     break
                 attempt_count += 1
-            
-            # 6번째 추가 (효과 동일 증명)
-            if len(unique_selected) >= 5:
-                last_idx = min(4, len(unique_selected) - 1)
-                fifth_clicks = unique_selected[last_idx].get('clicks', 0)
-                fifth_bid = unique_selected[last_idx].get('bid', 0)
-                
-                # 같은 클릭의 다음 입찰가 찾기
+
+            # ⭐ 최대 클릭 1개 추가 (효과 동일 증명용)
+            first_max_bid = None
+            for e in sorted(unique_selected, key=lambda x: x.get('bid', 0)):
+                if e.get('clicks', 0) == max_clicks_in_selected:
+                    first_max_bid = e.get('bid', 0)
+                    break
+
+            if first_max_bid:
                 candidates = [e for e in valid_estimates 
-                            if e.get('clicks', 0) == fifth_clicks 
-                            and e.get('bid', 0) > fifth_bid]
+                            if e.get('clicks', 0) == max_clicks_in_selected
+                            and e.get('bid', 0) > first_max_bid]
                 if candidates:
                     next_bid = min(candidates, key=lambda x: x.get('bid', 0))
                     if next_bid.get('bid', 0) not in seen_bids:
                         unique_selected.append(next_bid)
-                        seen_bids.add(next_bid.get('bid', 0))
-            
-            # ⭐ 정말 부족하면 균등 선택
-            if len(unique_selected) < 5:
-                step = max(1, len(valid_estimates) // 6)
-                for i in range(0, len(valid_estimates), step):
-                    bid = valid_estimates[i].get('bid', 0)
-                    if bid not in seen_bids:
-                        unique_selected.append(valid_estimates[i])
-                        seen_bids.add(bid)
-                        if len(unique_selected) >= 6:
-                            break
-            
-            # 입찰가 순으로 정렬
+
+            # 입찰가 순 정렬
             unique_selected.sort(key=lambda x: x.get('bid', 0))
-            
-            # 디버깅 로그
+
+            # ⭐ 디버깅
             logger.info(f"[디버그] 선택된 개수: {len(unique_selected)}")
+            logger.info(f"[디버그] 클릭수 분포: {[(e.get('bid'), e.get('clicks')) for e in unique_selected]}")
             
             # ⭐ 효율 입찰가 설정
             efficient_est = None
