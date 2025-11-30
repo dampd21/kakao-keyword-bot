@@ -314,7 +314,7 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
         url = f'https://api.searchad.naver.com{uri}'
         headers = get_naver_api_headers('POST', uri)
         payload = {"device": device, "keywordplus": False, "key": keyword, "bids": bids if isinstance(bids, list) else [bids]}
-        response = requests.post(url, headers=headers, json=payload, timeout=5)
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
         return {"success": False, "error": response.text}
@@ -874,7 +874,7 @@ def get_related_keywords_api(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 (새 버전)
+# 기능 3: 광고 단가 (개선 버전)
 #############################################
 def get_ad_cost(keyword):
     result = get_keyword_data(keyword)
@@ -889,12 +889,10 @@ def get_ad_cost(keyword):
     mobile_ratio = (mobile_qc * 100 // total_qc) if total_qc > 0 else 0
     comp_idx = kw.get("compIdx", "중간")
     
-    # 경쟁도 이모지
     comp_emoji = "🔴" if comp_idx == "높음" else "🟡" if comp_idx == "중간" else "🟢"
     
     lines = [f"💰 \"{keyword_name}\" 광고 분석", ""]
     
-    # ━━━━━━━━━━━━━━
     lines.append("━━━━━━━━━━━━━━")
     lines.append("📊 키워드 정보")
     lines.append("━━━━━━━━━━━━━━")
@@ -905,14 +903,18 @@ def get_ad_cost(keyword):
     lines.append(f"└ PC: {format_number(pc_qc)}회 ({100-mobile_ratio}%)")
     lines.append("")
     
-    # ▶ 모바일 예상 성과
-    test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
+    # ▶ 모바일 예상 성과 (세밀화된 테스트)
+    test_bids = [
+        100, 200, 300, 400, 500, 600, 700, 800, 900, 1000,
+        1200, 1500, 1800, 2000, 2200, 2500, 3000, 3500, 4000, 5000,
+        6000, 7000, 8000, 10000, 15000
+    ]
+    
     mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
     
     efficient_bid = None
     efficient_clicks = 0
     efficient_cost = 0
-    max_clicks_bid = None
     
     if mobile_perf.get("success"):
         mobile_estimates = mobile_perf["data"].get("estimate", [])
@@ -926,45 +928,81 @@ def get_ad_cost(keyword):
             lines.append("입찰가별 예상 성과")
             lines.append("")
             
-            prev_clicks = -1
-            shown_count = 0
-            max_clicks = 0
-            max_clicks_bid = 0
+            # 최대 클릭수 찾기
+            max_clicks = max(e.get('clicks', 0) for e in valid_estimates)
             
-            for est in valid_estimates:
-                bid = est.get("bid", 0)
-                clicks = est.get("clicks", 0)
-                cost = est.get("cost", 0)
-                
-                if clicks > max_clicks:
-                    max_clicks = clicks
-                    max_clicks_bid = bid
-                
-                if efficient_bid is None and clicks > 0:
-                    if prev_clicks >= 0 and clicks > prev_clicks:
-                        efficient_bid = bid
-                        efficient_clicks = clicks
-                        efficient_cost = cost
-                
-                if shown_count < 5:
-                    lines.append(f"{format_number(bid)}원 → 월 {clicks}회 클릭 | {format_won(cost)}")
-                    shown_count += 1
-                elif clicks > prev_clicks:
-                    lines.append(f"{format_number(bid)}원 → 월 {clicks}회 클릭 | {format_won(cost)}")
-                    shown_count += 1
-                
-                prev_clicks = clicks
+            # 최대 클릭에 처음 도달한 입찰가 찾기
+            first_max_bid = None
+            for e in sorted(valid_estimates, key=lambda x: x.get('bid', 0)):
+                if e.get('clicks', 0) == max_clicks:
+                    first_max_bid = e.get('bid', 0)
+                    break
             
-            if max_clicks_bid and max_clicks_bid < 10000:
-                lines.append(f"  ↑ {format_number(max_clicks_bid)}원 이상은 효과 동일")
+            # 6개 표시할 입찰가 선택
+            target_ratios = [0.2, 0.4, 0.6, 0.8, 1.0, 1.0]
+            selected_bids = []
+            
+            for i, ratio in enumerate(target_ratios):
+                target_clicks = int(max_clicks * ratio)
+                
+                if i == 5:
+                    # 6번째: 효과 동일 증명 (최대 클릭의 다음 입찰가)
+                    candidates = [e for e in valid_estimates 
+                                if e.get('clicks', 0) == max_clicks 
+                                and e.get('bid', 0) > first_max_bid]
+                    if candidates:
+                        selected_bids.append(min(candidates, key=lambda x: x.get('bid', 0)))
+                    else:
+                        # 없으면 첫 번째 최대값 재사용
+                        max_estimate = next((e for e in valid_estimates if e.get('clicks', 0) == max_clicks), None)
+                        if max_estimate:
+                            selected_bids.append(max_estimate)
+                else:
+                    # 1~5번째: 목표 클릭에 가장 가까운 입찰가
+                    closest = min(valid_estimates, 
+                                key=lambda x: abs(x.get('clicks', 0) - target_clicks))
+                    selected_bids.append(closest)
+            
+            # 중복 제거 및 정렬
+            seen_bids = set()
+            unique_selected = []
+            for e in selected_bids:
+                bid = e.get('bid', 0)
+                if bid not in seen_bids:
+                    seen_bids.add(bid)
+                    unique_selected.append(e)
+            
+            # 입찰가 순으로 정렬
+            unique_selected.sort(key=lambda x: x.get('bid', 0))
+            
+            # 효율 입찰가는 5번째 (최대 클릭 첫 도달)
+            if len(unique_selected) >= 5:
+                efficient_est = unique_selected[4]
+                efficient_bid = efficient_est.get('bid', 0)
+                efficient_clicks = efficient_est.get('clicks', 0)
+                efficient_cost = efficient_est.get('cost', 0)
+                
+                # 비용 보정
+                if efficient_cost == 0:
+                    efficient_cost = int(efficient_clicks * efficient_bid * 0.8)
+            
+            # 출력
+            for est in unique_selected:
+                bid = est.get('bid', 0)
+                clicks = est.get('clicks', 0)
+                cost = est.get('cost', 0)
+                
+                # 비용 계산
+                if cost == 0:
+                    cost = int(clicks * bid * 0.8)
+                
+                lines.append(f"{format_number(bid)}원 → 월 {clicks}회 클릭 | {format_won(cost)}")
+            
+            # 효과 동일 메시지
+            if first_max_bid:
+                lines.append(f"  ↑ {format_number(first_max_bid)}원 이상은 효과 동일")
             
             lines.append("")
-            
-            if efficient_bid is None and valid_estimates:
-                mid_idx = len(valid_estimates) // 2
-                efficient_bid = valid_estimates[mid_idx].get("bid", 0)
-                efficient_clicks = valid_estimates[mid_idx].get("clicks", 0)
-                efficient_cost = valid_estimates[mid_idx].get("cost", 0)
     
     # ▶ 추천 입찰가
     if efficient_bid:
@@ -984,15 +1022,15 @@ def get_ad_cost(keyword):
         lines.append("")
         
         # 대안 제시
-        if max_clicks_bid and max_clicks_bid < efficient_bid:
-            lines.append(f"※ {format_number(max_clicks_bid)}원 이상 올려도 클릭 증가 없음")
-        
-        # 예산 적을 때 대안
-        lower_estimates = [e for e in valid_estimates if e.get('bid', 0) < efficient_bid and e.get('clicks', 0) > 0]
-        if lower_estimates:
-            lower_bid = lower_estimates[-1].get('bid', 0)
-            lower_clicks = lower_estimates[-1].get('clicks', 0)
-            lower_cost = lower_estimates[-1].get('cost', 0)
+        if len(unique_selected) >= 4:
+            lower_est = unique_selected[3]
+            lower_bid = lower_est.get('bid', 0)
+            lower_clicks = lower_est.get('clicks', 0)
+            lower_cost = lower_est.get('cost', 0)
+            
+            if lower_cost == 0:
+                lower_cost = int(lower_clicks * lower_bid * 0.8)
+            
             lines.append(f"※ 예산 적으면 {format_number(lower_bid)}원도 가능 (월 {lower_clicks}회/{format_won(lower_cost)})")
         
         lines.append("")
@@ -1005,11 +1043,13 @@ def get_ad_cost(keyword):
         valid_pc = [e for e in pc_estimates if e.get('clicks', 0) > 0]
         
         if valid_pc:
-            # 클릭수가 가장 많은 입찰가 찾기
             best_pc = max(valid_pc, key=lambda x: x.get('clicks', 0))
             pc_bid = best_pc.get('bid', 0)
             pc_clicks = best_pc.get('clicks', 0)
             pc_cost = best_pc.get('cost', 0)
+            
+            if pc_cost == 0:
+                pc_cost = int(pc_clicks * pc_bid * 0.8)
             
             lines.append("━━━━━━━━━━━━━━")
             lines.append("💻 PC 예상 성과")
