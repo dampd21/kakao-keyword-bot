@@ -1792,17 +1792,17 @@ def test_commercial():
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
-@app.route('/test-place')
-def test_place():
-    place_id = request.args.get('id', '37838432')
-    result = get_place_keywords(place_id)
+@app.route('/test-place-info')
+def test_place_info():
+    place_id = request.args.get('id', '1309812619')
+    result = format_place_info(place_id)
     
-    html = f"<h2>ID: {place_id}</h2><h3>{'성공' if result['success'] else '실패'}</h3>"
-    if result['success']:
-        html += "<ul>" + "".join(f"<li>{kw}</li>" for kw in result['keywords']) + "</ul>"
-    else:
-        html += f"<p>{result.get('error')}</p>"
-    
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>플레이스 정보 테스트</title></head>
+<body>
+<h2>플레이스 ID: {place_id}</h2>
+<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
+</body></html>"""
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
