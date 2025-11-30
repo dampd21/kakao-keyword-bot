@@ -874,7 +874,7 @@ def get_related_keywords_api(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 (개선 버전)
+# 기능 3: 광고 단가 (최종 개선 버전)
 #############################################
 def get_ad_cost(keyword):
     result = get_keyword_data(keyword)
@@ -903,7 +903,7 @@ def get_ad_cost(keyword):
     lines.append(f"└ PC: {format_number(pc_qc)}회 ({100-mobile_ratio}%)")
     lines.append("")
     
-    # ▶ 모바일 예상 성과 (세밀화된 테스트)
+    # 세밀화된 테스트 입찰가
     test_bids = [
         100, 200, 300, 400, 500, 600, 700, 800, 900, 1000,
         1200, 1500, 1800, 2000, 2200, 2500, 3000, 3500, 4000, 5000,
@@ -919,6 +919,11 @@ def get_ad_cost(keyword):
     if mobile_perf.get("success"):
         mobile_estimates = mobile_perf["data"].get("estimate", [])
         valid_estimates = [e for e in mobile_estimates if e.get('clicks', 0) > 0]
+        
+        # 디버깅 로그
+        logger.info(f"[디버그] {keyword_name} - 총 입찰가 개수: {len(valid_estimates)}")
+        if valid_estimates:
+            logger.info(f"[디버그] 입찰가 범위: {valid_estimates[0].get('bid')}원 ~ {valid_estimates[-1].get('bid')}원")
         
         if valid_estimates:
             lines.append("━━━━━━━━━━━━━━")
@@ -946,24 +951,15 @@ def get_ad_cost(keyword):
                 target_clicks = int(max_clicks * ratio)
                 
                 if i == 5:
-                    # 6번째: 효과 동일 증명 (최대 클릭의 다음 입찰가)
-                    candidates = [e for e in valid_estimates 
-                                if e.get('clicks', 0) == max_clicks 
-                                and e.get('bid', 0) > first_max_bid]
-                    if candidates:
-                        selected_bids.append(min(candidates, key=lambda x: x.get('bid', 0)))
-                    else:
-                        # 없으면 첫 번째 최대값 재사용
-                        max_estimate = next((e for e in valid_estimates if e.get('clicks', 0) == max_clicks), None)
-                        if max_estimate:
-                            selected_bids.append(max_estimate)
+                    # 6번째는 나중에 처리
+                    pass
                 else:
-                    # 1~5번째: 목표 클릭에 가장 가까운 입찰가
+                    # 목표 클릭에 가장 가까운 입찰가
                     closest = min(valid_estimates, 
                                 key=lambda x: abs(x.get('clicks', 0) - target_clicks))
                     selected_bids.append(closest)
             
-            # 중복 제거 및 정렬
+            # 중복 제거
             seen_bids = set()
             unique_selected = []
             for e in selected_bids:
@@ -972,17 +968,75 @@ def get_ad_cost(keyword):
                     seen_bids.add(bid)
                     unique_selected.append(e)
             
+            # ⭐ 최소 6개 보장 (다양성 확보)
+            attempt_count = 0
+            while len(unique_selected) < 6 and attempt_count < len(valid_estimates):
+                for e in sorted(valid_estimates, key=lambda x: x.get('bid', 0)):
+                    bid = e.get('bid', 0)
+                    clicks = e.get('clicks', 0)
+                    
+                    if bid in seen_bids:
+                        continue
+                    
+                    # 5개 미만일 때는 클릭수 중복 방지
+                    if len(unique_selected) < 5:
+                        if any(e2.get('clicks', 0) == clicks for e2 in unique_selected):
+                            continue
+                    
+                    unique_selected.append(e)
+                    seen_bids.add(bid)
+                    break
+                else:
+                    break
+                attempt_count += 1
+            
+            # 6번째 추가 (효과 동일 증명)
+            if len(unique_selected) >= 5:
+                last_idx = min(4, len(unique_selected) - 1)
+                fifth_clicks = unique_selected[last_idx].get('clicks', 0)
+                fifth_bid = unique_selected[last_idx].get('bid', 0)
+                
+                # 같은 클릭의 다음 입찰가 찾기
+                candidates = [e for e in valid_estimates 
+                            if e.get('clicks', 0) == fifth_clicks 
+                            and e.get('bid', 0) > fifth_bid]
+                if candidates:
+                    next_bid = min(candidates, key=lambda x: x.get('bid', 0))
+                    if next_bid.get('bid', 0) not in seen_bids:
+                        unique_selected.append(next_bid)
+                        seen_bids.add(next_bid.get('bid', 0))
+            
+            # ⭐ 정말 부족하면 균등 선택
+            if len(unique_selected) < 5:
+                step = max(1, len(valid_estimates) // 6)
+                for i in range(0, len(valid_estimates), step):
+                    bid = valid_estimates[i].get('bid', 0)
+                    if bid not in seen_bids:
+                        unique_selected.append(valid_estimates[i])
+                        seen_bids.add(bid)
+                        if len(unique_selected) >= 6:
+                            break
+            
             # 입찰가 순으로 정렬
             unique_selected.sort(key=lambda x: x.get('bid', 0))
             
-            # 효율 입찰가는 5번째 (최대 클릭 첫 도달)
+            # 디버깅 로그
+            logger.info(f"[디버그] 선택된 개수: {len(unique_selected)}")
+            
+            # ⭐ 효율 입찰가 설정
+            efficient_est = None
             if len(unique_selected) >= 5:
                 efficient_est = unique_selected[4]
+            elif len(unique_selected) >= 3:
+                efficient_est = unique_selected[-1]
+            elif len(unique_selected) > 0:
+                efficient_est = unique_selected[0]
+            
+            if efficient_est:
                 efficient_bid = efficient_est.get('bid', 0)
                 efficient_clicks = efficient_est.get('clicks', 0)
                 efficient_cost = efficient_est.get('cost', 0)
                 
-                # 비용 보정
                 if efficient_cost == 0:
                     efficient_cost = int(efficient_clicks * efficient_bid * 0.8)
             
@@ -992,7 +1046,6 @@ def get_ad_cost(keyword):
                 clicks = est.get('clicks', 0)
                 cost = est.get('cost', 0)
                 
-                # 비용 계산
                 if cost == 0:
                     cost = int(clicks * bid * 0.8)
                 
@@ -1001,6 +1054,11 @@ def get_ad_cost(keyword):
             # 효과 동일 메시지
             if first_max_bid:
                 lines.append(f"  ↑ {format_number(first_max_bid)}원 이상은 효과 동일")
+            
+            # 데이터 부족 경고
+            if len(unique_selected) < 5:
+                lines.append("")
+                lines.append("※ 입찰가 데이터 부족으로 일부만 표시")
             
             lines.append("")
     
@@ -1023,7 +1081,7 @@ def get_ad_cost(keyword):
         
         # 대안 제시
         if len(unique_selected) >= 4:
-            lower_est = unique_selected[3]
+            lower_est = unique_selected[max(0, len(unique_selected) - 3)]
             lower_bid = lower_est.get('bid', 0)
             lower_clicks = lower_est.get('clicks', 0)
             lower_cost = lower_est.get('cost', 0)
@@ -1031,7 +1089,8 @@ def get_ad_cost(keyword):
             if lower_cost == 0:
                 lower_cost = int(lower_clicks * lower_bid * 0.8)
             
-            lines.append(f"※ 예산 적으면 {format_number(lower_bid)}원도 가능 (월 {lower_clicks}회/{format_won(lower_cost)})")
+            if lower_bid < efficient_bid:
+                lines.append(f"※ 예산 적으면 {format_number(lower_bid)}원도 가능 (월 {lower_clicks}회/{format_won(lower_cost)})")
         
         lines.append("")
     
