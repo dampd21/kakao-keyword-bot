@@ -323,82 +323,6 @@ def get_performance_estimate(keyword, bids, device='MOBILE'):
 
 
 #############################################
-# 순위별 입찰가 조회 (Performance API 역산 방식)
-#############################################
-def get_position_bids(keyword):
-    """Performance API로 순위별 입찰가 역산 - 수정 버전"""
-    
-    logger.info(f"[입찰가] Performance API로 추정 시작: {keyword}")
-    
-    test_bids = [
-        50, 100, 200, 300, 500, 700, 
-        1000, 1300, 1500, 1700, 2000, 2500, 3000, 
-        4000, 5000, 7000, 10000, 15000, 20000, 30000
-    ]
-    
-    try:
-        mobile_result = get_performance_estimate(keyword, test_bids, 'MOBILE')
-        pc_result = get_performance_estimate(keyword, test_bids, 'PC')
-        
-        if not mobile_result["success"] or not pc_result["success"]:
-            logger.error(f"[입찰가] Performance API 실패")
-            return {"success": False, "error": "Performance API 호출 실패"}
-        
-        mobile_estimates = mobile_result["data"].get("estimate", [])
-        pc_estimates = pc_result["data"].get("estimate", [])
-        
-        if not mobile_estimates or not pc_estimates:
-            logger.error(f"[입찰가] 응답 데이터 없음")
-            return {"success": False, "error": "응답 데이터 없음"}
-        
-        # ⭐ 핵심 변경: 입찰가 기준으로 내림차순 정렬 (높은 입찰가 = 1위)
-        mobile_sorted = sorted(
-            [e for e in mobile_estimates if e.get('clicks', 0) > 0],
-            key=lambda x: x.get('bid', 0),  # ✅ clicks → bid로 변경
-            reverse=True  # 높은 입찰가부터
-        )
-        
-        pc_sorted = sorted(
-            [e for e in pc_estimates if e.get('clicks', 0) > 0],
-            key=lambda x: x.get('bid', 0),  # ✅ clicks → bid로 변경
-            reverse=True
-        )
-        
-        mobile_bids = {}
-        pc_bids = {}
-        
-        # 상위 5개를 1~5위로 매핑 (입찰가 높은 순)
-        for i in range(min(5, len(mobile_sorted))):
-            mobile_bids[i + 1] = mobile_sorted[i].get('bid', 0)
-        
-        for i in range(min(5, len(pc_sorted))):
-            pc_bids[i + 1] = pc_sorted[i].get('bid', 0)
-        
-        # 빈 순위 보정
-        for device_bids in [mobile_bids, pc_bids]:
-            if len(device_bids) < 5:
-                last_pos = len(device_bids)
-                last_bid = device_bids.get(last_pos, 100) if last_pos > 0 else 100
-                
-                for i in range(last_pos + 1, 6):
-                    # 하위 순위는 더 낮은 입찰가
-                    device_bids[i] = max(int(last_bid * (0.7 ** (i - last_pos))), 50)
-        
-        logger.info(f"[입찰가] 추정 완료 - Mobile: {mobile_bids}, PC: {pc_bids}")
-        
-        return {
-            "success": True,
-            "pc": pc_bids,
-            "mobile": mobile_bids,
-            "api_used": "performance_estimate"
-        }
-        
-    except Exception as e:
-        logger.error(f"[입찰가] 예외 발생: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-
-#############################################
 # DataLab 트렌드 API
 #############################################
 def get_datalab_trend(keyword):
@@ -950,7 +874,7 @@ def get_related_keywords_api(keyword):
 
 
 #############################################
-# 기능 3: 광고 단가 (수정 버전)
+# 기능 3: 광고 단가 (새 버전)
 #############################################
 def get_ad_cost(keyword):
     result = get_keyword_data(keyword)
@@ -963,55 +887,25 @@ def get_ad_cost(keyword):
     mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
     total_qc = pc_qc + mobile_qc
     mobile_ratio = (mobile_qc * 100 // total_qc) if total_qc > 0 else 0
+    comp_idx = kw.get("compIdx", "중간")
     
-    lines = [f"[광고분석] {keyword_name}", ""]
+    # 경쟁도 이모지
+    comp_emoji = "🔴" if comp_idx == "높음" else "🟡" if comp_idx == "중간" else "🟢"
     
-    lines.append("▶ 키워드 정보")
+    lines = [f"💰 \"{keyword_name}\" 광고 분석", ""]
+    
+    # ━━━━━━━━━━━━━━
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("📊 키워드 정보")
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("")
+    lines.append(f"경쟁도: {comp_idx} {comp_emoji}")
     lines.append(f"월간 검색량: {format_number(total_qc)}회")
-    lines.append(f"모바일 {mobile_ratio}% / PC {100-mobile_ratio}%")
+    lines.append(f"├ 모바일: {format_number(mobile_qc)}회 ({mobile_ratio}%)")
+    lines.append(f"└ PC: {format_number(pc_qc)}회 ({100-mobile_ratio}%)")
     lines.append("")
     
-    # ▶ 순위별 입찰가
-    logger.info(f"순위별 입찰가 조회 시작: {keyword_name}")
-    position_result = get_position_bids(keyword_name)
-    
-    if position_result["success"]:
-        pc_bids = position_result["pc"]
-        mobile_bids = position_result["mobile"]
-        
-        lines.append("▶ 네이버 파워링크 입찰가")
-        lines.append("")
-        
-        for pos in [1, 2, 3, 4, 5]:
-            pc_bid = pc_bids.get(pos, 0)
-            mobile_bid = mobile_bids.get(pos, 0)
-            lines.append(f"{pos}위")
-            lines.append(f"PC: {format_number(pc_bid)}원")
-            lines.append(f"MOBILE: {format_number(mobile_bid)}원")
-            lines.append("")
-        
-        if position_result.get("api_used"):
-            logger.info(f"[성공] 사용된 방식: {position_result['api_used']}")
-        
-        lines.append("───────────────")
-        
-        today = date.today()
-        start_date = today - timedelta(days=30)
-        end_date = today
-
-        lines.append(f"통계 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
-        lines.append("")
-
-        top1_mobile = mobile_bids.get(1, 0)
-    else:
-        logger.error(f"순위별 입찰가 조회 실패: {position_result.get('error')}")
-        lines.append("▶ 순위별 입찰가")
-        lines.append(f"※ 조회 실패: {position_result.get('error', '알 수 없는 오류')}")
-        lines.append("(아래 예상 성과 참고)")
-        lines.append("")
-        top1_mobile = None
-    
-    # ▶ 예상 성과
+    # ▶ 모바일 예상 성과
     test_bids = [100, 300, 500, 700, 1000, 1500, 2000, 3000, 5000, 7000, 10000]
     mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
     
@@ -1025,7 +919,12 @@ def get_ad_cost(keyword):
         valid_estimates = [e for e in mobile_estimates if e.get('clicks', 0) > 0]
         
         if valid_estimates:
-            lines.append("▶ 예상 성과 (모바일)")
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("📱 모바일 성과 분석")
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("")
+            lines.append("입찰가별 예상 성과")
+            lines.append("")
             
             prev_clicks = -1
             shown_count = 0
@@ -1048,16 +947,16 @@ def get_ad_cost(keyword):
                         efficient_cost = cost
                 
                 if shown_count < 5:
-                    lines.append(f"{format_number(bid)}원 → 월 {clicks}클릭 / {format_won(cost)}")
+                    lines.append(f"{format_number(bid)}원 → 월 {clicks}회 클릭 | {format_won(cost)}")
                     shown_count += 1
                 elif clicks > prev_clicks:
-                    lines.append(f"{format_number(bid)}원 → 월 {clicks}클릭 / {format_won(cost)}")
+                    lines.append(f"{format_number(bid)}원 → 월 {clicks}회 클릭 | {format_won(cost)}")
                     shown_count += 1
                 
                 prev_clicks = clicks
             
             if max_clicks_bid and max_clicks_bid < 10000:
-                lines.append(f"※ {format_number(max_clicks_bid)}원 이상 클릭 증가 없음")
+                lines.append(f"  ↑ {format_number(max_clicks_bid)}원 이상은 효과 동일")
             
             lines.append("")
             
@@ -1067,34 +966,84 @@ def get_ad_cost(keyword):
                 efficient_clicks = valid_estimates[mid_idx].get("clicks", 0)
                 efficient_cost = valid_estimates[mid_idx].get("cost", 0)
     
-    # ▶ 추천 전략
-    lines.append("▶ 추천 전략")
-    
-    if top1_mobile:
-        lines.append(f"• 1위 목표: {format_number(top1_mobile)}원 이상 입찰")
-    
+    # ▶ 추천 입찰가
     if efficient_bid:
-        lines.append(f"• 효율 입찰: {format_number(efficient_bid)}원 (월 {efficient_clicks}클릭)")
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("🎯 추천 입찰가")
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("")
+        lines.append(f"✅ 추천: {format_number(efficient_bid)}원")
+        lines.append(f"├ 예상 클릭: 월 {efficient_clicks}회")
+        lines.append(f"├ 예상 비용: 월 {format_won(efficient_cost)}")
         
-        start_min = int(efficient_bid * 0.5)
-        start_max = int(efficient_bid * 0.7)
-        start_min = max(start_min, 100)
-        lines.append(f"• 시작가: {format_number(start_min)}~{format_number(start_max)}원 권장")
+        cpc = int(efficient_cost / efficient_clicks) if efficient_clicks > 0 else 0
+        lines.append(f"├ 클릭당 비용: 약 {format_number(cpc)}원")
         
         daily_budget = max(efficient_cost / 30, 10000)
-        lines.append(f"• 일 예산: {format_won(daily_budget)}")
-    else:
-        lines.append("• 시작가: 100~500원")
-        lines.append("• 일 예산: 5,000~10,000원")
+        lines.append(f"└ 일 예산: 약 {format_won(daily_budget)}")
+        lines.append("")
+        
+        # 대안 제시
+        if max_clicks_bid and max_clicks_bid < efficient_bid:
+            lines.append(f"※ {format_number(max_clicks_bid)}원 이상 올려도 클릭 증가 없음")
+        
+        # 예산 적을 때 대안
+        lower_estimates = [e for e in valid_estimates if e.get('bid', 0) < efficient_bid and e.get('clicks', 0) > 0]
+        if lower_estimates:
+            lower_bid = lower_estimates[-1].get('bid', 0)
+            lower_clicks = lower_estimates[-1].get('clicks', 0)
+            lower_cost = lower_estimates[-1].get('cost', 0)
+            lines.append(f"※ 예산 적으면 {format_number(lower_bid)}원도 가능 (월 {lower_clicks}회/{format_won(lower_cost)})")
+        
+        lines.append("")
     
-    lines.append("• 예상 CTR: 모바일 2.3% / PC 1.1%")
+    # ▶ PC 예상 성과
+    pc_perf = get_performance_estimate(keyword_name, test_bids, 'PC')
+    
+    if pc_perf.get("success"):
+        pc_estimates = pc_perf["data"].get("estimate", [])
+        valid_pc = [e for e in pc_estimates if e.get('clicks', 0) > 0]
+        
+        if valid_pc:
+            # 클릭수가 가장 많은 입찰가 찾기
+            best_pc = max(valid_pc, key=lambda x: x.get('clicks', 0))
+            pc_bid = best_pc.get('bid', 0)
+            pc_clicks = best_pc.get('clicks', 0)
+            pc_cost = best_pc.get('cost', 0)
+            
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("💻 PC 예상 성과")
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("")
+            lines.append(f"추천: {format_number(pc_bid)}원")
+            lines.append(f"├ 예상 클릭: 월 {pc_clicks}회")
+            lines.append(f"└ 예상 비용: 월 {format_won(pc_cost)}")
+            lines.append("")
+    
+    # ▶ 운영 가이드
+    if efficient_bid:
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("📋 운영 가이드")
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("")
+        lines.append("시작 설정")
+        lines.append(f"• 입찰가: {format_number(efficient_bid)}원")
+        lines.append(f"• 일 예산: {format_won(daily_budget)}")
+        lines.append(f"• 월 예산: 약 {format_won(efficient_cost)}")
+        lines.append("")
+        lines.append("운영 팁")
+        lines.append("• 1주일 후 CTR 확인 (1.5% 이상 목표)")
+        lines.append("• 전환 발생 시 예산 증액 검토")
+        lines.append("• 품질점수 관리로 CPC 절감 가능")
+        lines.append("")
+        lines.append("━━━━━━━━━━━━━━")
     
     return "\n".join(lines)
 
 
-# ===== 나머지 함수들 (운세, 로또, 대표키워드, 자동완성, 도움말 등) =====
-# (기존 코드 그대로 유지 - 너무 길어서 생략)
-
+#############################################
+# 기능 5: 운세
+#############################################
 def get_fortune(birthdate=None):
     if not GEMINI_API_KEY:
         return get_fortune_fallback(birthdate)
@@ -1187,6 +1136,9 @@ def get_fortune_fallback(birthdate=None):
 행운의 색: {random.choice(colors)}"""
 
 
+#############################################
+# 기능 6: 로또
+#############################################
 def get_lotto():
     if not GEMINI_API_KEY:
         return get_lotto_fallback()
@@ -1223,6 +1175,9 @@ def get_lotto_fallback():
     return result
 
 
+#############################################
+# 기능 7: 대표키워드
+#############################################
 def extract_place_id_from_url(url_or_id):
     url_or_id = url_or_id.strip()
     if url_or_id.isdigit():
@@ -1287,6 +1242,9 @@ def format_place_keywords(input_str):
     return response
 
 
+#############################################
+# 기능 8: 자동완성
+#############################################
 def get_autocomplete(keyword):
     try:
         params = {"q": keyword, "con": "1", "frm": "nv", "ans": "2", "r_format": "json", "r_enc": "UTF-8", "r_unicode": "0", "t_koreng": "1", "run": "2", "rev": "4", "q_enc": "UTF-8", "st": "100"}
@@ -1317,6 +1275,9 @@ def get_autocomplete(keyword):
     return f"[자동완성] {keyword}\n\n결과 없음"
 
 
+#############################################
+# 도움말
+#############################################
 def get_help():
     return """[사용 가이드]
 
@@ -1425,76 +1386,6 @@ def test_ad():
 <h3>글자 수: {len(result)}자</h3>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
 </body></html>"""
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
-
-@app.route('/test-position')
-def test_position():
-    keyword = request.args.get('q', '부평맛집')
-    
-    logger.info(f"========== 순위별 입찰가 테스트 시작: {keyword} ==========")
-    result = get_position_bids(keyword)
-    logger.info(f"========== 테스트 종료 ==========")
-    
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>순위별 입찰가 테스트</title></head>
-<body style="font-family: monospace; padding: 20px;">
-<h2>키워드: {keyword}</h2>
-<h3 style="color: {'green' if result.get('success') else 'red'}">
-    {'✅ 성공' if result.get('success') else '❌ 실패'}
-</h3>
-"""
-    
-    if result.get('api_used'):
-        html += f"<p><b>사용된 방식:</b> <code>{result['api_used']}</code></p>"
-    
-    html += f"""
-<div style="background: #f5f5f5; padding: 15px; margin: 10px 0;">
-    <h4>원본 응답:</h4>
-    <pre>{json.dumps(result, ensure_ascii=False, indent=2)}</pre>
-</div>
-"""
-    
-    if result.get('success'):
-        html += """
-<div style="background: white; padding: 20px; margin: 20px 0; border: 1px solid #ddd;">
-<h3>네이버 파워링크 입찰가</h3>
-<br>
-"""
-        for pos in [1, 2, 3, 4, 5]:
-            pc_bid = result['pc'].get(pos, 0)
-            mobile_bid = result['mobile'].get(pos, 0)
-            html += f"""
-<div style="margin-bottom: 15px;">
-    <b>{pos}위</b><br>
-    PC: {format_number(pc_bid)}원<br>
-    MOBILE: {format_number(mobile_bid)}원
-</div>
-"""
-        
-        today = date.today()
-        if today.month == 1:
-            start_date = date(today.year - 1, 12, 1)
-            end_date = date(today.year, 1, 1)
-        else:
-            start_date = date(today.year, today.month - 1, 1)
-            end_date = date(today.year, today.month, 1)
-        
-        html += f"""
-<div style="border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;">
-통계 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}
-</div>
-</div>
-"""
-    else:
-        html += f"""
-<div style="background: #ffebee; padding: 15px; margin: 10px 0; color: #c62828;">
-    <h4>오류 메시지:</h4>
-    <p>{result.get('error', '알 수 없는 오류')}</p>
-</div>
-"""
-    
-    html += "</body></html>"
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
