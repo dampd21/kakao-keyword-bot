@@ -80,35 +80,86 @@ def clean_keyword(keyword):
     return keyword.replace(" ", "")
 
 #############################################
-# 업종 코드 매핑
+# 업종 코드 매핑 (소상공인 API 기반)
 #############################################
-INDUSTRY_CODES = {
-    "음식점": {"code": "Q", "name": "음식점업"},
-    "한식": {"code": "Q12", "name": "한식음식점"},
-    "중식": {"code": "Q13", "name": "중식음식점"},
-    "일식": {"code": "Q14", "name": "일식음식점"},
-    "양식": {"code": "Q15", "name": "양식음식점"},
-    "치킨": {"code": "Q16", "name": "치킨전문점"},
-    "분식": {"code": "Q17", "name": "분식전문점"},
-    "카페": {"code": "Q21", "name": "커피/음료"},
-    "디저트": {"code": "Q22", "name": "제과점"},
-    "병원": {"code": "G", "name": "의료업"},
-    "의원": {"code": "G01", "name": "의원"},
-    "치과": {"code": "G02", "name": "치과의원"},
-    "한의원": {"code": "G03", "name": "한의원"},
-    "피부과": {"code": "G04", "name": "피부과"},
-    "학원": {"code": "R", "name": "학원"},
-    "입시학원": {"code": "R01", "name": "입시학원"},
-    "외국어학원": {"code": "R02", "name": "외국어학원"},
-    "예체능학원": {"code": "R03", "name": "예체능학원"},
-    "편의점": {"code": "D01", "name": "편의점"},
-    "슈퍼마켓": {"code": "D02", "name": "슈퍼마켓"},
-    "미용실": {"code": "S01", "name": "미용실"},
-    "네일": {"code": "S02", "name": "네일샵"},
-    "부동산": {"code": "L", "name": "부동산중개업"},
-    "PC방": {"code": "R04", "name": "PC방"},
-    "노래방": {"code": "R05", "name": "노래방"}
-}
+INDUSTRY_CODES = {}
+
+def load_industry_codes():
+    """소상공인 API에서 업종 코드 로드"""
+    global INDUSTRY_CODES
+    
+    try:
+        # 대분류 로드
+        large_url = f"https://apis.data.go.kr/B553077/api/open/sdsc2/storeZoneIndsLclasInfoService"
+        params = {
+            "serviceKey": DATA_GO_KR_API_KEY,
+            "pageNo": "1",
+            "numOfRows": "100",
+            "type": "json"
+        }
+        
+        response = requests.get(large_url, params=params, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            body = data.get("body", {})
+            items = body.get("items", [])
+            
+            for item in items:
+                code = item.get("indsLclsCd", "")
+                name = item.get("indsLclsNm", "")
+                if code and name:
+                    INDUSTRY_CODES[name] = {"code": code, "name": name, "level": "large"}
+            
+            logger.info(f"✅ 업종 대분류 {len(items)}개 로드")
+        
+        # 중분류 로드
+        middle_url = f"https://apis.data.go.kr/B553077/api/open/sdsc2/storeZoneIndsMclasInfoService"
+        response = requests.get(middle_url, params=params, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            body = data.get("body", {})
+            items = body.get("items", [])
+            
+            for item in items:
+                code = item.get("indsMclsCd", "")
+                name = item.get("indsMclsNm", "")
+                if code and name:
+                    INDUSTRY_CODES[name] = {"code": code, "name": name, "level": "middle"}
+            
+            logger.info(f"✅ 업종 중분류 {len(items)}개 로드")
+        
+        # 소분류 로드
+        small_url = f"https://apis.data.go.kr/B553077/api/open/sdsc2/storeZoneIndsSclasInfoService"
+        response = requests.get(small_url, params=params, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            body = data.get("body", {})
+            items = body.get("items", [])
+            
+            for item in items:
+                code = item.get("indsSclsCd", "")
+                name = item.get("indsSclsNm", "")
+                if code and name:
+                    INDUSTRY_CODES[name] = {"code": code, "name": name, "level": "small"}
+            
+            logger.info(f"✅ 업종 소분류 {len(items)}개 로드")
+        
+    except Exception as e:
+        logger.error(f"업종 코드 로드 실패: {str(e)}")
+        # 폴백: 기본 업종 코드
+        INDUSTRY_CODES.update({
+            "음식점": {"code": "Q", "name": "음식점업", "level": "large"},
+            "한식": {"code": "Q12", "name": "한식음식점", "level": "middle"},
+            "중식": {"code": "Q13", "name": "중식음식점", "level": "middle"},
+            "일식": {"code": "Q14", "name": "일식음식점", "level": "middle"},
+            "카페": {"code": "Q21", "name": "커피/음료", "level": "middle"},
+            "병원": {"code": "G", "name": "의료업", "level": "large"},
+            "학원": {"code": "R", "name": "학원", "level": "large"},
+            "편의점": {"code": "D01", "name": "편의점", "level": "middle"},
+        })
 
 #############################################
 # 네이버 검색광고 API
@@ -1031,408 +1082,135 @@ def create_comparison_chart_url(analysis):
         logger.error(f"❌ 비교 차트 생성 오류: {str(e)}")
         return None
 
-def create_region_charts_url(region_data):
-    """지역 분석 차트 (파이 + 막대)"""
+#############################################
+# 소상공인 API
+#############################################
+def get_store_count_by_region(adm_cd, industry_code=None):
+    """행정동별 상가업소 수 조회"""
+    
+    if not DATA_GO_KR_API_KEY:
+        logger.warning("⚠️ 소상공인 API 키 미설정")
+        return {"success": False, "error": "API 키 미설정"}
     
     try:
-        pop_data = get_population_data(region_data)
+        url = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeListInDong"
+        params = {
+            "serviceKey": DATA_GO_KR_API_KEY,
+            "key": adm_cd,
+            "pageNo": "1",
+            "numOfRows": "1000",
+            "type": "json"
+        }
         
-        # 연령대 파이 차트
-        age_data = pop_data["by_age"]
-        age_labels = []
-        age_values = []
+        if industry_code:
+            params["indsLclsCd"] = industry_code
         
-        for age, ratio in sorted(age_data.items()):
-            age_labels.append(age.replace('s', '대'))
-            age_values.append(ratio)
+        response = requests.get(url, params=params, timeout=5)
         
-        pie_config = {
-            "type": "pie",
-            "data": {
-                "labels": age_labels,
-                "datasets": [{
-                    "data": age_values,
-                    "backgroundColor": [
-                        "rgba(255, 99, 132, 0.7)",
-                        "rgba(54, 162, 235, 0.7)",
-                        "rgba(255, 206, 86, 0.7)",
-                        "rgba(75, 192, 192, 0.7)",
-                        "rgba(153, 102, 255, 0.7)"
-                    ]
-                }]
-            },
-            "options": {
-                "title": {
-                    "display": True,
-                    "text": "연령대 비율",
-                    "fontSize": 20,
-                    "padding": 20
-                },
-                "legend": {
-                    "position": "right",
-                    "labels": {
-                        "fontSize": 14
-                    }
-                }
+        if response.status_code == 200:
+            data = response.json()
+            body = data.get("body", {})
+            items = body.get("items", [])
+            total_count = body.get("totalCount", 0)
+            
+            logger.info(f"✅ 상가업소 {total_count}개 조회")
+            
+            return {
+                "success": True,
+                "total_count": total_count,
+                "stores": items
             }
-        }
         
-        pie_json = json.dumps(pie_config)
-        pie_encoded = urllib.parse.quote(pie_json)
-        pie_url = f"https://quickchart.io/chart?c={pie_encoded}&width=500&height=350&backgroundColor=white"
-        
-        # 시간대별 막대 차트
-        time_data = pop_data["by_time"]
-        time_labels = ["07-09시", "12-13시", "18-19시", "20-22시"]
-        time_values = [
-            time_data["0709"],
-            time_data["1213"],
-            time_data["1819"],
-            time_data["2022"]
-        ]
-        
-        bar_config = {
-            "type": "bar",
-            "data": {
-                "labels": time_labels,
-                "datasets": [{
-                    "label": "유동인구 (명)",
-                    "data": time_values,
-                    "backgroundColor": "rgba(66, 133, 244, 0.7)",
-                    "borderColor": "rgb(66, 133, 244)",
-                    "borderWidth": 2
-                }]
-            },
-            "options": {
-                "title": {
-                    "display": True,
-                    "text": "시간대별 유동인구",
-                    "fontSize": 20,
-                    "padding": 20
-                },
-                "legend": {
-                    "display": False
-                },
-                "scales": {
-                    "yAxes": [{
-                        "ticks": {
-                            "beginAtZero": True,
-                            "fontSize": 14
-                        }
-                    }],
-                    "xAxes": [{
-                        "ticks": {
-                            "fontSize": 14
-                        }
-                    }]
-                }
-            }
-        }
-        
-        bar_json = json.dumps(bar_config)
-        bar_encoded = urllib.parse.quote(bar_json)
-        bar_url = f"https://quickchart.io/chart?c={bar_encoded}&width=700&height=400&backgroundColor=white"
-        
-        logger.info(f"✅ 지역 차트 URL 생성 완료")
-        
-        return {
-            "pie_chart": pie_url,
-            "bar_chart": bar_url
-        }
+        logger.error(f"❌ 상가업소 조회 실패: {response.status_code}")
+        return {"success": False, "error": f"상태코드 {response.status_code}"}
         
     except Exception as e:
-        logger.error(f"❌ 지역 차트 생성 오류: {str(e)}")
-        return None
+        logger.error(f"❌ 상가업소 조회 오류: {str(e)}")
+        return {"success": False, "error": str(e)}
 
-#############################################
-# 텍스트 포맷 함수들
-#############################################
-
-def format_comparison_text(analysis):
-    """비교 분석 전체 텍스트"""
+def get_store_changes_by_date(start_date, end_date, adm_cd=None):
+    """기간별 개폐업 조회"""
     
-    if not analysis:
-        return "[검색량 비교] 조회 실패"
+    if not DATA_GO_KR_API_KEY:
+        return {"success": False, "error": "API 키 미설정"}
     
-    keyword = analysis["keyword"]
-    vol_2025 = analysis["volume_2025"]
-    vol_2024 = analysis.get("volume_2024")
-    change_rate = analysis["change_rate"]
-    mobile_ratio = analysis["mobile_ratio"]
-    
-    mobile_2025 = int(vol_2025 * mobile_ratio / 100)
-    pc_2025 = vol_2025 - mobile_2025
-    
-    lines = [f"[검색량 비교] {keyword}", ""]
-    
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("📊 월간 검색량")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    if vol_2024:
-        mobile_2024 = int(vol_2024 * mobile_ratio / 100)
-        pc_2024 = vol_2024 - mobile_2024
-        
-        lines.append(f"2024년: {format_number(vol_2024)}회")
-        lines.append(f"├─ 모바일: {format_number(mobile_2024)}회 ({mobile_ratio:.0f}%)")
-        lines.append(f"└─ PC: {format_number(pc_2024)}회 ({100-mobile_ratio:.0f}%)")
-        lines.append("")
-    
-    lines.append(f"2025년: {format_number(vol_2025)}회")
-    lines.append(f"├─ 모바일: {format_number(mobile_2025)}회 ({mobile_ratio:.0f}%)")
-    lines.append(f"└─ PC: {format_number(pc_2025)}회 ({100-mobile_ratio:.0f}%)")
-    lines.append("")
-    
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("📈 증감 분석")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    if vol_2024:
-        diff = vol_2025 - vol_2024
-        emoji = "📈" if change_rate > 0 else "📉" if change_rate < 0 else "➡️"
-        sign = "+" if change_rate > 0 else ""
-        
-        lines.append(f"전년 대비: {sign}{format_number(diff)}회 ({sign}{change_rate:.1f}%) {emoji}")
-    
-    lines.append("")
-    
-    if analysis.get("datalab_available") and analysis["monthly_2025"]:
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("📉 월별 추이 (최근 6개월)")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("")
-        
-        lines.append("2024년")
-        for item in analysis["monthly_2024"]:
-            period = item["period"]
-            ratio = item["ratio"]
-            
-            month = period.split("-")[1]
-            value = int(ratio * 100)
-            bar_length = int(ratio / 10)
-            bar = "█" * bar_length
-            
-            lines.append(f"├─ {month}월: {value:>6,} {bar}")
-        
-        lines.append("")
-        
-        lines.append("2025년")
-        for item in analysis["monthly_2025"]:
-            period = item["period"]
-            ratio = item["ratio"]
-            
-            month = period.split("-")[1]
-            value = int(ratio * 100)
-            bar_length = int(ratio / 10)
-            bar = "█" * bar_length
-            
-            lines.append(f"├─ {month}월: {value:>6,} {bar}")
-        
-        lines.append("")
-    
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("💡 인사이트")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    if change_rate >= 20:
-        sign = "+" if change_rate > 0 else ""
-        lines.append(f"✅ 급성장 중 ({sign}{change_rate:.1f}%)")
-        lines.append("→ 검색 광고 적극 추천")
-    elif change_rate >= 10:
-        lines.append(f"✅ 지속 성장 (+{change_rate:.1f}%)")
-        lines.append("→ 광고 시작 적기")
-    elif change_rate >= -10:
-        sign = "+" if change_rate > 0 else ""
-        lines.append(f"➡️ 안정 유지 ({sign}{change_rate:.1f}%)")
-        lines.append("→ 꾸준한 마케팅")
-    else:
-        lines.append(f"⚠️ 검색 감소 ({change_rate:.1f}%)")
-        lines.append("→ SNS 바이럴 필요")
-    
-    lines.append(f"✅ 모바일 비중 {mobile_ratio:.0f}% - 최적화 필수")
-    
-    return "\n".join(lines)
-
-def format_region_full_text(region_data):
-    """지역 분석 전체 텍스트"""
-    
-    pop_data = get_population_data(region_data)
-    
-    lines = [f"[지역분석] {region_data['fullName']}", ""]
-    
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("👥 유동인구")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    daily_avg = pop_data["daily_avg"]
-    lines.append(f"일평균: {format_number(daily_avg)}명")
-    lines.append("")
-    
-    lines.append("연령대:")
-    age_data = pop_data["by_age"]
-    for age, ratio in age_data.items():
-        count = int(daily_avg * ratio / 100)
-        star = " ⭐" if ratio >= 25 else ""
-        lines.append(f"├─ {age.replace('s', '대')}: {ratio}% ({format_number(count)}명){star}")
-    
-    lines.append("")
-    lines.append("성별:")
-    gender = pop_data["by_gender"]
-    lines.append(f"├─ 여성: {gender['female']}%")
-    lines.append(f"└─ 남성: {gender['male']}%")
-    
-    lines.append("")
-    lines.append("시간대별:")
-    time_data = pop_data["by_time"]
-    lines.append(f"├─ 07-09시: {format_number(time_data['0709'])}명")
-    lines.append(f"├─ 12-13시: {format_number(time_data['1213'])}명 🔥")
-    lines.append(f"├─ 18-19시: {format_number(time_data['1819'])}명 🔥")
-    lines.append(f"└─ 20-22시: {format_number(time_data['2022'])}명")
-    
-    lines.append("")
-    lines.append("평일/주말:")
-    weekday = pop_data["weekday_vs_weekend"]
-    diff = int((weekday['weekend'] - weekday['weekday']) / weekday['weekday'] * 100)
-    lines.append(f"├─ 평일: {format_number(weekday['weekday'])}명")
-    lines.append(f"└─ 주말: {format_number(weekday['weekend'])}명 ({diff:+d}%)")
-    
-    lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("📍 입지 특성")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    dong_name = region_data.get("dongNm", "")
-    
-    if "역삼" in dong_name or "강남" in dong_name:
-        facilities = ["오피스 밀집", "대기업 본사"]
-        strength = ["고소득층", "직장인 밀집"]
-        weakness = ["높은 임대료", "치열한 경쟁"]
-    elif "홍대" in dong_name or "동교" in dong_name:
-        facilities = ["대학가", "클럽/공연장"]
-        strength = ["젊은층", "유동인구 많음"]
-        weakness = ["주말 집중", "소음"]
-    elif "부평" in dong_name or "삼산" in dong_name:
-        facilities = ["역세권", "주거 복합"]
-        strength = ["안정적 수요", "평일 강세"]
-        weakness = ["주말 약세", "주차 부족"]
-    else:
-        facilities = ["데이터 수집 중"]
-        strength = ["분석 중"]
-        weakness = ["분석 중"]
-    
-    lines.append("주요 시설:")
-    for fac in facilities:
-        lines.append(f"• {fac}")
-    
-    lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("💡 입지 인사이트")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    lines.append("✅ 강점")
-    for s in strength:
-        lines.append(f"• {s}")
-    
-    lines.append("")
-    lines.append("⚠️ 약점")
-    for w in weakness:
-        lines.append(f"• {w}")
-    
-    lines.append("")
-    lines.append("🎯 업종 적합도")
-    lines.append("음식점: ⭐⭐⭐⭐⭐")
-    lines.append("카페: ⭐⭐⭐⭐")
-    lines.append("소매: ⭐⭐⭐")
-    
-    return "\n".join(lines)
-
-#############################################
-# 카카오 응답 함수들
-#############################################
-
-def create_kakao_comparison_response(keyword, analysis):
-    """비교 - 막대그래프 + 전체 텍스트"""
-    
-    if not analysis:
-        return create_kakao_response("[검색량 비교] 조회 실패")
-    
-    # 차트 URL 생성
-    chart_url = create_comparison_chart_url(analysis)
-    
-    # 전체 텍스트
-    full_text = format_comparison_text(analysis)
-    
-    # 차트 실패 시 텍스트만
-    if not chart_url:
-        return create_kakao_response(full_text)
-    
-    # 차트 + 텍스트
-    return jsonify({
-        "version": "2.0",
-        "template": {
-            "outputs": [
-                {
-                    "simpleImage": {
-                        "imageUrl": chart_url,
-                        "altText": f"{keyword} 검색량 비교 그래프"
-                    }
-                },
-                {
-                    "simpleText": {
-                        "text": full_text
-                    }
-                }
-            ]
+    try:
+        url = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeListInUpjong"
+        params = {
+            "serviceKey": DATA_GO_KR_API_KEY,
+            "key": start_date,
+            "pageNo": "1",
+            "numOfRows": "1000",
+            "type": "json"
         }
-    })
+        
+        response = requests.get(url, params=params, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            body = data.get("body", {})
+            items = body.get("items", [])
+            
+            opened = sum(1 for item in items if item.get("trdStateGbn") == "01")
+            closed = sum(1 for item in items if item.get("trdStateGbn") == "03")
+            
+            return {
+                "success": True,
+                "opened": opened,
+                "closed": closed,
+                "closure_rate": (closed / len(items) * 100) if items else 0
+            }
+        
+        return {"success": False, "error": f"상태코드 {response.status_code}"}
+        
+    except Exception as e:
+        logger.error(f"❌ 개폐업 조회 오류: {str(e)}")
+        return {"success": False, "error": str(e)}
 
-def create_kakao_region_response(region_keyword, region_data):
-    """지역 - 파이+막대그래프 + 전체 텍스트"""
+def get_trade_area_info(region_data):
+    """상권 정보 조회"""
     
-    if not region_data["success"]:
-        return create_kakao_response(f"[지역분석] 오류\n\n'{region_keyword}' 지역을 찾을 수 없습니다.")
+    if not DATA_GO_KR_API_KEY:
+        return {"success": False, "error": "API 키 미설정"}
     
-    # 차트 URL 생성
-    charts = create_region_charts_url(region_data)
-    
-    # 전체 텍스트
-    full_text = format_region_full_text(region_data)
-    
-    # 차트 실패 시 텍스트만
-    if not charts:
-        return create_kakao_response(full_text)
-    
-    # 차트 2개 + 텍스트
-    return jsonify({
-        "version": "2.0",
-        "template": {
-            "outputs": [
-                {
-                    "simpleImage": {
-                        "imageUrl": charts["pie_chart"],
-                        "altText": "연령대 비율 파이차트"
-                    }
-                },
-                {
-                    "simpleImage": {
-                        "imageUrl": charts["bar_chart"],
-                        "altText": "시간대별 유동인구"
-                    }
-                },
-                {
-                    "simpleText": {
-                        "text": full_text
-                    }
-                }
-            ]
+    try:
+        adm_cd = region_data.get("admCd", "")
+        
+        url = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeZoneInAdmi"
+        params = {
+            "serviceKey": DATA_GO_KR_API_KEY,
+            "key": adm_cd,
+            "pageNo": "1",
+            "numOfRows": "100",
+            "type": "json"
         }
-    })
+        
+        response = requests.get(url, params=params, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            body = data.get("body", {})
+            items = body.get("items", [])
+            
+            if items:
+                trade_areas = []
+                for item in items:
+                    trade_areas.append({
+                        "name": item.get("mainTrarNm", ""),
+                        "code": item.get("trarNo", ""),
+                        "type": item.get("trarArea", "")
+                    })
+                
+                return {
+                    "success": True,
+                    "trade_areas": trade_areas
+                }
+        
+        return {"success": False, "error": "상권 정보 없음"}
+        
+    except Exception as e:
+        logger.error(f"❌ 상권 정보 조회 오류: {str(e)}")
+        return {"success": False, "error": str(e)}
 
 #############################################
 # Kakao API
@@ -1552,221 +1330,269 @@ def kakao_address_search(region_keyword):
         return {"success": False, "error": str(e)}
 
 #############################################
-# 유동인구/매출 데이터
+# 지역 분석
 #############################################
-def get_population_data(region_data):
-    """유동인구 데이터"""
-    import random
+def format_region_analysis(region_keyword):
+    """지역 분석 - 실제 데이터 기반"""
     
-    base_pop_map = {
-        "강남": 15000, "역삼": 15000, "논현": 12000,
-        "홍대": 25000, "동교": 25000,
-        "부평": 8200, "삼산": 7000,
-        "송도": 12000,
-        "해운대": 18000, "우동": 18000,
-        "서면": 16000, "부전": 16000
-    }
-    
-    dong_name = region_data.get("dongNm", "")
-    base_pop = 10000
-    
-    for key, pop in base_pop_map.items():
-        if key in dong_name:
-            base_pop = pop
-            break
-    
-    return {
-        "success": True,
-        "daily_avg": base_pop,
-        "by_age": {
-            "10s": random.randint(5, 10),
-            "20s": random.randint(25, 35),
-            "30s": random.randint(20, 28),
-            "40s": random.randint(18, 25),
-            "50s": random.randint(12, 20)
-        },
-        "by_gender": {
-            "male": random.randint(45, 52),
-            "female": random.randint(48, 55)
-        },
-        "by_time": {
-            "0709": int(base_pop * 0.22),
-            "1213": int(base_pop * 0.29),
-            "1819": int(base_pop * 0.34),
-            "2022": int(base_pop * 0.15)
-        },
-        "weekday_vs_weekend": {
-            "weekday": int(base_pop * 1.07),
-            "weekend": int(base_pop * 0.88)
-        }
-    }
-
-def get_business_data(region_data, industry_keyword):
-    """상가업소 데이터"""
-    import random
-    
-    industry_info = INDUSTRY_CODES.get(industry_keyword)
-    if not industry_info:
-        return {"success": False, "error": "업종 없음"}
-    
-    total_count = random.randint(80, 500)
-    opened = random.randint(10, 50)
-    closed = random.randint(8, 45)
-    
-    return {
-        "success": True,
-        "industry": industry_info["name"],
-        "total": total_count,
-        "opened": opened,
-        "closed": closed,
-        "closure_rate": round((closed / total_count) * 100, 1),
-        "by_type": {
-            "한식": random.randint(30, 60),
-            "중식": random.randint(10, 30),
-            "일식": random.randint(8, 25)
-        } if industry_keyword == "음식점" else {}
-    }
-
-def get_sales_data(region_data, industry_keyword):
-    """매출 데이터"""
-    import random
-    
-    base_sales = {
-        "음식점": 2200, "한식": 2350, "카페": 1920,
-        "병원": 4800, "학원": 3200
-    }
-    
-    monthly_sales = base_sales.get(industry_keyword, 2000) * 10000
-    payment_count = random.randint(1200, 2500)
-    avg_price = int(monthly_sales / payment_count)
-    
-    return {
-        "success": True,
-        "monthly_sales": monthly_sales,
-        "payment_count": payment_count,
-        "avg_price": avg_price,
-        "yoy_growth": round(random.uniform(3.0, 15.0), 1),
-        "time_dist": {
-            "lunch": random.randint(30, 42),
-            "dinner": random.randint(35, 48)
-        },
-        "weekday_ratio": random.randint(58, 72)
-    }
-
-def format_sales_analysis(region_input):
-    """매출 분석 - 텍스트만"""
-    
-    parts = region_input.split()
-    
-    if len(parts) < 3:
-        return """[매출분석] 사용법
-
-형식: 매출 [시] [동] [업종]
-
-예시:
-• 매출 인천 부평동 음식점
-• 매출 부산 서면동 카페
-• 매출 서울 강남구 한식"""
-    
-    city = parts[0]
-    dong = parts[1]
-    industry_keyword = parts[2]
-    
-    full_region = f"{city} {dong}"
-    region_data = search_kakao_region(full_region)
+    region_data = search_kakao_region(region_keyword)
     
     if not region_data["success"]:
-        return f"[매출분석] 오류\n\n'{full_region}' 지역을 찾을 수 없습니다."
+        return f"[지역분석] 오류\n\n'{region_keyword}' 지역을 찾을 수 없습니다."
     
-    if industry_keyword not in INDUSTRY_CODES:
-        available = ", ".join(list(INDUSTRY_CODES.keys())[:10])
-        return f"[매출분석] 오류\n\n'{industry_keyword}' 업종 없음\n\n가능: {available}"
+    full_name = region_data.get("fullName", "")
+    adm_cd = region_data.get("admCd", "")
     
-    business_data = get_business_data(region_data, industry_keyword)
-    sales_data = get_sales_data(region_data, industry_keyword)
+    lines = [f"[지역분석] {full_name}", ""]
     
-    full_name = region_data.get("fullName", f"{city} {dong}")
+    # 상권 정보
+    trade_area = get_trade_area_info(region_data)
     
-    lines = [f"[매출분석] {full_name} {industry_keyword}", ""]
+    if trade_area.get("success"):
+        areas = trade_area.get("trade_areas", [])
+        if areas:
+            lines.append("━━━━━━━━━━━━━━━━━━━━━")
+            lines.append("📍 상권 정보")
+            lines.append("━━━━━━━━━━━━━━━━━━━━━")
+            lines.append("")
+            for area in areas[:3]:
+                lines.append(f"• {area['name']}")
+            lines.append("")
     
+    # 상가업소 현황
+    store_data = get_store_count_by_region(adm_cd)
+    
+    if store_data.get("success"):
+        total = store_data.get("total_count", 0)
+        
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("🏪 상가업소 현황")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
+        lines.append(f"총 업소 수: {format_number(total)}개")
+        lines.append("")
+        
+        # 업종별 분류 (상위 5개)
+        stores = store_data.get("stores", [])
+        industry_count = {}
+        
+        for store in stores:
+            industry = store.get("indsLclsNm", "기타")
+            industry_count[industry] = industry_count.get(industry, 0) + 1
+        
+        if industry_count:
+            sorted_industries = sorted(industry_count.items(), key=lambda x: x[1], reverse=True)
+            
+            lines.append("업종별 분포:")
+            for industry, count in sorted_industries[:5]:
+                ratio = (count / total * 100) if total > 0 else 0
+                lines.append(f"├─ {industry}: {count}개 ({ratio:.1f}%)")
+            lines.append("")
+    
+    # 개폐업 현황 (최근 1년)
+    today = date.today()
+    one_year_ago = today - timedelta(days=365)
+    start_date = one_year_ago.strftime("%Y%m%d")
+    
+    changes = get_store_changes_by_date(start_date, today.strftime("%Y%m%d"), adm_cd)
+    
+    if changes.get("success"):
+        opened = changes.get("opened", 0)
+        closed = changes.get("closed", 0)
+        closure_rate = changes.get("closure_rate", 0)
+        
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("📊 개폐업 현황 (최근 1년)")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
+        lines.append(f"신규: {opened}개")
+        lines.append(f"폐업: {closed}개")
+        lines.append(f"순증: {opened - closed:+d}개")
+        lines.append(f"폐업률: {closure_rate:.1f}%")
+        
+        if closure_rate >= 15:
+            lines.append("⚠️ 높은 폐업률 - 진입 신중 필요")
+        elif closure_rate <= 8:
+            lines.append("✅ 안정적인 상권")
+        
+        lines.append("")
+    
+    # 인사이트
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("💰 평균 매출")
+    lines.append("💡 상권 인사이트")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
-    monthly = sales_data["monthly_sales"]
-    payment = sales_data["payment_count"]
-    avg_price = sales_data["avg_price"]
-    growth = sales_data["yoy_growth"]
+    if store_data.get("success"):
+        total = store_data.get("total_count", 0)
+        if total >= 1000:
+            lines.append("✅ 대형 상권 - 높은 유동인구")
+        elif total >= 500:
+            lines.append("✅ 중형 상권 - 안정적 수요")
+        else:
+            lines.append("⚠️ 소형 상권 - 틈새시장 공략")
     
-    lines.append(f"월평균: {monthly // 10000:,}만원")
-    lines.append(f"├─ 결제건수: {payment:,}건")
-    lines.append(f"├─ 객단가: {avg_price:,}원")
-    lines.append(f"└─ 전년비: +{growth}%")
+    if changes.get("success"):
+        opened = changes.get("opened", 0)
+        closed = changes.get("closed", 0)
+        if opened > closed * 1.5:
+            lines.append("📈 활발한 신규 진입 - 성장 상권")
+        elif closed > opened * 1.5:
+            lines.append("📉 폐업 증가 - 차별화 필수")
     
-    lines.append("")
+    return "\n".join(lines)
+
+#############################################
+# 텍스트 포맷 함수들
+#############################################
+
+def format_comparison_text(analysis):
+    """비교 분석 전체 텍스트"""
+    
+    if not analysis:
+        return "[검색량 비교] 조회 실패"
+    
+    keyword = analysis["keyword"]
+    vol_2025 = analysis["volume_2025"]
+    vol_2024 = analysis.get("volume_2024")
+    change_rate = analysis["change_rate"]
+    mobile_ratio = analysis["mobile_ratio"]
+    
+    mobile_2025 = int(vol_2025 * mobile_ratio / 100)
+    pc_2025 = vol_2025 - mobile_2025
+    
+    lines = [f"[검색량 비교] {keyword}", ""]
+    
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("🏪 업소 현황")
+    lines.append("📊 월간 검색량")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
-    total = business_data["total"]
-    lines.append(f"총 {industry_keyword}: {total}개")
+    if vol_2024:
+        mobile_2024 = int(vol_2024 * mobile_ratio / 100)
+        pc_2024 = vol_2024 - mobile_2024
+        
+        lines.append(f"2024년: {format_number(vol_2024)}회")
+        lines.append(f"├─ 모바일: {format_number(mobile_2024)}회 ({mobile_ratio:.0f}%)")
+        lines.append(f"└─ PC: {format_number(pc_2024)}회 ({100-mobile_ratio:.0f}%)")
+        lines.append("")
     
+    lines.append(f"2025년: {format_number(vol_2025)}회")
+    lines.append(f"├─ 모바일: {format_number(mobile_2025)}회 ({mobile_ratio:.0f}%)")
+    lines.append(f"└─ PC: {format_number(pc_2025)}회 ({100-mobile_ratio:.0f}%)")
     lines.append("")
+    
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("📊 개폐업 (최근 1년)")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    opened = business_data["opened"]
-    closed = business_data["closed"]
-    net = opened - closed
-    closure_rate = business_data["closure_rate"]
-    
-    lines.append(f"신규: {opened}개")
-    lines.append(f"폐업: {closed}개")
-    sign = "+" if net >= 0 else ""
-    lines.append(f"순증: {sign}{net}개")
-    lines.append(f"폐업률: {closure_rate}%")
-    
-    if closure_rate >= 15:
-        lines.append("⚠️⚠️ 높은 폐업률")
-    
-    lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("🕐 시간대별 매출")
+    lines.append("📈 증감 분석")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
-    time_dist = sales_data["time_dist"]
-    lines.append(f"점심: {time_dist['lunch']}% 🔥")
-    lines.append(f"저녁: {time_dist['dinner']}% 🔥")
+    if vol_2024:
+        diff = vol_2025 - vol_2024
+        emoji = "📈" if change_rate > 0 else "📉" if change_rate < 0 else "➡️"
+        sign = "+" if change_rate > 0 else ""
+        
+        lines.append(f"전년 대비: {sign}{format_number(diff)}회 ({sign}{change_rate:.1f}%) {emoji}")
     
     lines.append("")
+    
+    if analysis.get("datalab_available") and analysis["monthly_2025"]:
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("📉 월별 추이 (최근 6개월)")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
+        
+        lines.append("2024년")
+        for item in analysis["monthly_2024"]:
+            period = item["period"]
+            ratio = item["ratio"]
+            
+            month = period.split("-")[1]
+            value = int(ratio * 100)
+            bar_length = int(ratio / 10)
+            bar = "█" * bar_length
+            
+            lines.append(f"├─ {month}월: {value:>6,} {bar}")
+        
+        lines.append("")
+        
+        lines.append("2025년")
+        for item in analysis["monthly_2025"]:
+            period = item["period"]
+            ratio = item["ratio"]
+            
+            month = period.split("-")[1]
+            value = int(ratio * 100)
+            bar_length = int(ratio / 10)
+            bar = "█" * bar_length
+            
+            lines.append(f"├─ {month}월: {value:>6,} {bar}")
+        
+        lines.append("")
+    
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("💡 인사이트")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
-    if growth >= 10:
-        lines.append(f"✅ 높은 성장 (+{growth}%)")
+    if change_rate >= 20:
+        sign = "+" if change_rate > 0 else ""
+        lines.append(f"✅ 급성장 중 ({sign}{change_rate:.1f}%)")
+        lines.append("→ 검색 광고 적극 추천")
+    elif change_rate >= 10:
+        lines.append(f"✅ 지속 성장 (+{change_rate:.1f}%)")
+        lines.append("→ 광고 시작 적기")
+    elif change_rate >= -10:
+        sign = "+" if change_rate > 0 else ""
+        lines.append(f"➡️ 안정 유지 ({sign}{change_rate:.1f}%)")
+        lines.append("→ 꾸준한 마케팅")
+    else:
+        lines.append(f"⚠️ 검색 감소 ({change_rate:.1f}%)")
+        lines.append("→ SNS 바이럴 필요")
     
-    if closure_rate >= 15:
-        lines.append("⚠️ 차별화 필수")
-    elif closure_rate <= 8:
-        lines.append("✅ 안정적")
-    
-    lines.append("")
-    lines.append("📌 성공 전략")
-    lines.append(f"• 객단가 {avg_price:,}원 유지")
-    
-    if time_dist['lunch'] >= 35:
-        lines.append("• 점심 마케팅 집중")
-    if time_dist['dinner'] >= 40:
-        lines.append("• 저녁 웨이팅 관리")
+    lines.append(f"✅ 모바일 비중 {mobile_ratio:.0f}% - 최적화 필수")
     
     return "\n".join(lines)
+
+#############################################
+# 카카오 응답 함수들
+#############################################
+
+def create_kakao_comparison_response(keyword, analysis):
+    """비교 - 막대그래프 + 전체 텍스트"""
+    
+    if not analysis:
+        return create_kakao_response("[검색량 비교] 조회 실패")
+    
+    # 차트 URL 생성
+    chart_url = create_comparison_chart_url(analysis)
+    
+    # 전체 텍스트
+    full_text = format_comparison_text(analysis)
+    
+    # 차트 실패 시 텍스트만
+    if not chart_url:
+        return create_kakao_response(full_text)
+    
+    # 차트 + 텍스트
+    return jsonify({
+        "version": "2.0",
+        "template": {
+            "outputs": [
+                {
+                    "simpleImage": {
+                        "imageUrl": chart_url,
+                        "altText": f"{keyword} 검색량 비교 그래프"
+                    }
+                },
+                {
+                    "simpleText": {
+                        "text": full_text
+                    }
+                }
+            ]
+        }
+    })
 
 #############################################
 # 도움말
@@ -1803,12 +1629,9 @@ def get_help():
 ▶ 검색량 비교
 예) 비교 부평맛집
 
-▶ 지역 분석
+▶ 지역 분석 (상가업소 기반)
 예) 지역 홍대
 예) 지역 부평동
-
-▶ 매출 분석(시+동+업종)
-예) 매출 인천 부평동 음식점
 ━━━━━━━━━━━━━━━━━━━━━
 
 🎲 재미 기능
@@ -1849,7 +1672,7 @@ def kakao_skill():
         if lower_input in ["로또", "로또번호"]:
             return create_kakao_response(get_lotto())
         
-        # ✅ 비교 - 막대그래프 + 전체 텍스트
+        # 비교 - 막대그래프 + 전체 텍스트
         if lower_input.startswith("비교 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
@@ -1857,7 +1680,7 @@ def kakao_skill():
                 return create_kakao_comparison_response(keyword, analysis)
             return create_kakao_response("예) 비교 부평맛집")
         
-        # ✅ 광고 - 텍스트만
+        # 광고 - 텍스트만
         if lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1865,20 +1688,12 @@ def kakao_skill():
                 return create_kakao_response(get_ad_cost(keyword))
             return create_kakao_response("예) 광고 부평맛집")
         
-        # ✅ 지역 - 파이+막대그래프 + 전체 텍스트
+        # 지역 - 상가업소 실제 데이터
         if lower_input.startswith("지역 "):
             region = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if region:
-                region_data = search_kakao_region(region)
-                return create_kakao_region_response(region, region_data)
+                return create_kakao_response(format_region_analysis(region))
             return create_kakao_response("예) 지역 부평동")
-        
-        # ✅ 매출 - 텍스트만
-        if lower_input.startswith("매출 "):
-            input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
-            if input_text:
-                return create_kakao_response(format_sales_analysis(input_text))
-            return create_kakao_response("예) 매출 인천 부평동 음식점")
         
         if lower_input.startswith("유튜브 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
@@ -1948,24 +1763,14 @@ def test_chart():
             return "분석 실패", 500
     
     elif chart_type == 'region':
-        region_data = search_kakao_region(keyword)
-        if region_data["success"]:
-            charts = create_region_charts_url(region_data)
-            text = format_region_full_text(region_data)
-            if charts:
-                html = f"""<!DOCTYPE html>
+        text = format_region_analysis(keyword)
+        html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>지역 분석</title></head>
 <body style="font-family:Arial; max-width:900px; margin:50px auto; padding:20px;">
 <h2>📊 지역 분석: {keyword}</h2>
-<h3>연령대 파이 차트</h3>
-<img src="{charts['pie_chart']}" style="width:100%; max-width:500px;">
-<h3>시간대 막대 차트</h3>
-<img src="{charts['bar_chart']}" style="width:100%; max-width:700px;">
-<hr>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{text}</pre>
 </body></html>"""
-                return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-        return "지역 조회 실패", 500
+        return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
     
     else:
         return "잘못된 타입", 400
@@ -1990,7 +1795,13 @@ if __name__ == '__main__':
     print(f"DataLab API: {'✅' if NAVER_CLIENT_ID else '❌'}")
     print(f"Kakao API: {'✅' if KAKAO_REST_API_KEY else '❌'}")
     print(f"Gemini API: {'✅' if GEMINI_API_KEY else '❌'}")
+    print(f"소상공인 API: {'✅' if DATA_GO_KR_API_KEY else '❌'}")
     print("====================")
+    
+    # 서버 시작 시 업종 코드 로드
+    logger.info("🔄 업종 코드 로딩 중...")
+    load_industry_codes()
+    logger.info(f"✅ 총 {len(INDUSTRY_CODES)}개 업종 코드 로드 완료")
     
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
