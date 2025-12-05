@@ -11,7 +11,7 @@ import json
 import logging
 from datetime import date, timedelta
 from urllib.parse import quote
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 
@@ -301,7 +301,7 @@ def get_naver_api_headers(method="GET", uri="/keywordstool"):
     }
 
 def get_keyword_data(keyword, retry=0):
-    """키워드 데이터 조회 (재시도 로직 포함)"""
+    """키워드 데이터 조회"""
     if not validate_required_keys():
         return {"success": False, "error": "API 키가 설정되지 않았습니다."}
 
@@ -312,7 +312,7 @@ def get_keyword_data(keyword, retry=0):
     for attempt in range(retry + 1):
         try:
             headers = get_naver_api_headers("GET", uri)
-            response = requests.get(base_url + uri, headers=headers, params=params, timeout=2.5)
+            response = requests.get(base_url + uri, headers=headers, params=params, timeout=2)
             
             if response.status_code == 200:
                 data = response.json()
@@ -321,31 +321,18 @@ def get_keyword_data(keyword, retry=0):
                     return {"success": True, "data": keyword_list}
                 return {"success": False, "error": "검색 결과가 없습니다."}
             
-            if attempt < retry:
-                logger.debug(f"재시도 {attempt + 1}/{retry}: {keyword}")
-                time.sleep(0.3)
-                continue
-            
             return {"success": False, "error": f"API 오류 ({response.status_code})"}
             
         except requests.Timeout:
-            if attempt < retry:
-                logger.debug(f"타임아웃 재시도 {attempt + 1}/{retry}")
-                time.sleep(0.3)
-                continue
             return {"success": False, "error": "요청 시간 초과"}
         except Exception as e:
-            logger.error(f"키워드 조회 오류: {str(e)}")
-            if attempt < retry:
-                time.sleep(0.3)
-                continue
             return {"success": False, "error": str(e)}
 
 #############################################
 # CPC API
 #############################################
 def get_performance_estimate(keyword, bids, device='MOBILE', retry=2):
-    """성과 예측 API (재시도 로직 포함)"""
+    """성과 예측 API"""
     uri = '/estimate/performance/keyword'
     url = f'https://api.searchad.naver.com{uri}'
     payload = {
@@ -364,7 +351,6 @@ def get_performance_estimate(keyword, bids, device='MOBILE', retry=2):
                 return {"success": True, "data": response.json()}
             
             if attempt < retry:
-                logger.debug(f"성과 예측 재시도 {attempt + 1}/{retry}")
                 time.sleep(0.5)
                 continue
             
@@ -372,12 +358,10 @@ def get_performance_estimate(keyword, bids, device='MOBILE', retry=2):
             
         except requests.Timeout:
             if attempt < retry:
-                logger.debug(f"타임아웃 재시도 {attempt + 1}/{retry}")
                 time.sleep(0.5)
                 continue
             return {"success": False, "error": "요청 시간 초과"}
         except Exception as e:
-            logger.error(f"성과 예측 오류: {str(e)}")
             if attempt < retry:
                 time.sleep(0.5)
                 continue
@@ -387,7 +371,7 @@ def get_performance_estimate(keyword, bids, device='MOBILE', retry=2):
 # DataLab 트렌드 API
 #############################################
 def get_datalab_trend(keyword, retry=0):
-    """트렌드 데이터 조회 (재시도 로직 포함)"""
+    """트렌드 데이터 조회"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         return {"success": False, "error": "DataLab API 키 미설정"}
 
@@ -407,34 +391,21 @@ def get_datalab_trend(keyword, retry=0):
         "Content-Type": "application/json"
     }
 
-    for attempt in range(retry + 1):
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=2.5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                results = data.get("results", [])
-                if results and results[0].get("data"):
-                    return {"success": True, "data": results[0]["data"]}
-            
-            if attempt < retry:
-                logger.debug(f"트렌드 재시도 {attempt + 1}/{retry}")
-                time.sleep(0.3)
-                continue
-            
-            return {"success": False, "error": "트렌드 데이터 없음"}
-            
-        except requests.Timeout:
-            if attempt < retry:
-                time.sleep(0.3)
-                continue
-            return {"success": False, "error": "요청 시간 초과"}
-        except Exception as e:
-            logger.error(f"트렌드 조회 오류: {str(e)}")
-            if attempt < retry:
-                time.sleep(0.3)
-                continue
-            return {"success": False, "error": str(e)}
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=2)
+        
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("results", [])
+            if results and results[0].get("data"):
+                return {"success": True, "data": results[0]["data"]}
+        
+        return {"success": False, "error": "트렌드 데이터 없음"}
+        
+    except requests.Timeout:
+        return {"success": False, "error": "요청 시간 초과"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 #############################################
 # 네이버 플레이스 리뷰 수집
@@ -451,7 +422,7 @@ def get_place_reviews(keyword, max_count=10):
 
     try:
         url = f"https://m.search.naver.com/search.naver?query={quote(keyword)}&where=m_local"
-        response = requests.get(url, headers=headers, timeout=2.5)
+        response = requests.get(url, headers=headers, timeout=2)
         
         if response.status_code != 200:
             return {"success": False, "error": "검색 실패"}
@@ -512,7 +483,6 @@ def get_place_reviews(keyword, max_count=10):
         return {"success": False, "error": "리뷰 데이터 추출 실패"}
         
     except Exception as e:
-        logger.error(f"리뷰 수집 오류: {str(e)}")
         return {"success": False, "error": str(e)}
 
 #############################################
@@ -642,10 +612,31 @@ def generate_ad_strategy(analysis):
     return "\n".join(lines), level
 
 #############################################
-# 상권분석 (병렬 처리 - 타임아웃 방지)
+# 병렬 처리 헬퍼 함수
+#############################################
+def wait_with_timeout(futures_dict, timeout):
+    """futures를 타임아웃 내에 완료된 것만 반환"""
+    start = time.time()
+    done = set()
+    
+    while time.time() - start < timeout:
+        for key, future in futures_dict.items():
+            if key not in done and future.done():
+                done.add(key)
+        
+        if len(done) == len(futures_dict):
+            break
+        
+        time.sleep(0.05)
+    
+    not_done = set(futures_dict.keys()) - done
+    return done, not_done
+
+#############################################
+# 상권분석 (완전 병렬 처리 - 타임아웃 방지)
 #############################################
 def get_commercial_analysis(keyword):
-    """키워드 기반 상권 분석 - 병렬 처리로 속도 개선"""
+    """키워드 기반 상권 분석 - 완전 병렬 처리"""
 
     region, region_data = extract_region(keyword)
 
@@ -659,50 +650,63 @@ def get_commercial_analysis(keyword):
         "business_count": None
     }
 
-    # 1. 검색 데이터 (필수) - 먼저 실행
-    search_result = get_keyword_data(keyword, retry=0)
-    if search_result["success"]:
-        kw = search_result["data"][0]
-        pc = parse_count(kw.get("monthlyPcQcCnt"))
-        mobile = parse_count(kw.get("monthlyMobileQcCnt"))
-        total = pc + mobile
-        comp_idx = kw.get("compIdx", "중간")
-        
-        result["search_data"] = {
-            "total": total,
-            "mobile": mobile,
-            "pc": pc,
-            "mobile_ratio": (mobile * 100 // total) if total > 0 else 0,
-            "comp_idx": comp_idx
-        }
-        
-        result["business_count"] = estimate_business_count(total, comp_idx, region)
+    # 모든 API를 병렬로 실행
+    futures = {
+        'search': executor.submit(get_keyword_data, keyword, 0),
+        'trend': executor.submit(get_datalab_trend, keyword, 0),
+        'review': executor.submit(get_place_reviews, keyword, 10)
+    }
 
-    # 2. 트렌드 + 리뷰 병렬 실행 (총 2.5초 내 완료 목표)
-    futures = {}
-    futures['trend'] = executor.submit(get_datalab_trend, keyword, 0)
-    futures['review'] = executor.submit(get_place_reviews, keyword, 10)
+    # 전체 타임아웃 3초 내에 완료된 것만 수집
+    done, not_done = wait_with_timeout(futures, timeout=3.0)
 
-    for key, future in futures.items():
+    # 검색 데이터 처리
+    if 'search' in done:
         try:
-            data = future.result(timeout=2.5)
-            
-            if key == 'trend' and data.get("success"):
-                series = data["data"]
+            search_result = futures['search'].result(timeout=0.1)
+            if search_result.get("success"):
+                kw = search_result["data"][0]
+                pc = parse_count(kw.get("monthlyPcQcCnt"))
+                mobile = parse_count(kw.get("monthlyMobileQcCnt"))
+                total = pc + mobile
+                comp_idx = kw.get("compIdx", "중간")
+                
+                result["search_data"] = {
+                    "total": total,
+                    "mobile": mobile,
+                    "pc": pc,
+                    "mobile_ratio": (mobile * 100 // total) if total > 0 else 0,
+                    "comp_idx": comp_idx
+                }
+                result["business_count"] = estimate_business_count(total, comp_idx, region)
+        except:
+            pass
+
+    # 트렌드 데이터 처리
+    if 'trend' in done:
+        try:
+            trend_result = futures['trend'].result(timeout=0.1)
+            if trend_result.get("success"):
+                series = trend_result["data"]
                 change = 0
                 if len(series) >= 6:
                     last3 = sum(p.get("ratio", 0) for p in series[-3:]) / 3
                     prev3 = sum(p.get("ratio", 0) for p in series[-6:-3]) / 3
                     change = ((last3 - prev3) / prev3) * 100 if prev3 > 0 else 0
                 result["trend_data"] = {"series": series, "change": change}
-            
-            elif key == 'review' and data.get("success"):
-                result["review_data"] = data
-                
-        except Exception:
+        except:
             pass
 
-    # 3. 리뷰 실패 시 추정값으로 대체
+    # 리뷰 데이터 처리
+    if 'review' in done:
+        try:
+            review_result = futures['review'].result(timeout=0.1)
+            if review_result.get("success"):
+                result["review_data"] = review_result
+        except:
+            pass
+
+    # 리뷰 실패 시 추정값으로 대체
     if not result["review_data"] and result["search_data"]:
         estimated = estimate_reviews(
             result["search_data"]["total"],
@@ -912,7 +916,7 @@ def get_related_keywords(keyword):
     try:
         url = f"https://search.naver.com/search.naver?where=nexearch&query={requests.utils.quote(keyword)}"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept-Language": "ko-KR,ko;q=0.9"}
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=3)
 
         if response.status_code == 200:
             pattern = re.findall(r'<div class="tit">([^<]+)</div>', response.text)
@@ -1332,7 +1336,7 @@ def get_place_keywords(place_id):
     for category in ['restaurant', 'place', 'cafe', 'hospital', 'beauty']:
         try:
             url = f"https://m.place.naver.com/{category}/{place_id}/home"
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, headers=headers, timeout=5)
             if response.status_code == 200:
                 html = response.content.decode('utf-8', errors='ignore')
                 match = re.search(r'"keywordList"\s*:\s*\[((?:"[^"]*",?\s*)*)\]', html)
@@ -1378,7 +1382,7 @@ def get_autocomplete(keyword):
     try:
         params = {"q": keyword, "con": "1", "frm": "nv", "ans": "2", "r_format": "json", "r_enc": "UTF-8", "r_unicode": "0", "t_koreng": "1", "run": "2", "rev": "4", "q_enc": "UTF-8", "st": "100"}
         headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.naver.com/"}
-        response = requests.get("https://ac.search.naver.com/nx/ac", params=params, headers=headers, timeout=5)
+        response = requests.get("https://ac.search.naver.com/nx/ac", params=params, headers=headers, timeout=3)
 
         if response.status_code == 200:
             suggestions = []
@@ -1421,7 +1425,7 @@ def get_youtube_autocomplete(keyword):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
 
-        response = requests.get(url, params=params, headers=headers, timeout=5)
+        response = requests.get(url, params=params, headers=headers, timeout=3)
         
         if response.status_code == 200:
             text = response.text
