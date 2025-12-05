@@ -11,6 +11,7 @@ import json
 import logging
 from datetime import date, timedelta
 from urllib.parse import quote
+import urllib.parse  # ✅ QuickChart용 추가
 
 app = Flask(__name__)
 
@@ -784,7 +785,7 @@ def get_lotto_fallback():
     return result
 
 #############################################
-# 신규 기능: 검색량 비교 (수정)
+# 신규 기능: 검색량 비교
 #############################################
 def get_datalab_trend(keyword, start_date, end_date):
     """DataLab 트렌드 조회"""
@@ -952,8 +953,180 @@ def create_fallback_comparison(keyword, current_volume, mobile_ratio):
         "datalab_available": False
     }
 
+#############################################
+# ✅ QuickChart.io 차트 생성 (신규 추가)
+#############################################
+def create_quickchart_url(analysis):
+    """QuickChart.io로 검색량 비교 차트 URL 생성"""
+    
+    try:
+        keyword = analysis["keyword"]
+        
+        # 월별 데이터 추출
+        months_2025 = [item["period"].split("-")[1] for item in analysis["monthly_2025"]]
+        values_2025 = [int(item["ratio"] * 100) for item in analysis["monthly_2025"]]
+        
+        months_2024 = [item["period"].split("-")[1] for item in analysis["monthly_2024"]]
+        values_2024 = [int(item["ratio"] * 100) for item in analysis["monthly_2024"]]
+        
+        # Chart.js 설정
+        chart_config = {
+            "type": "line",
+            "data": {
+                "labels": [f"{m}월" for m in months_2025],
+                "datasets": [
+                    {
+                        "label": "2024년",
+                        "data": values_2024,
+                        "borderColor": "rgb(234, 67, 53)",
+                        "backgroundColor": "rgba(234, 67, 53, 0.1)",
+                        "borderWidth": 3,
+                        "pointRadius": 5,
+                        "pointHoverRadius": 7,
+                        "fill": True
+                    },
+                    {
+                        "label": "2025년",
+                        "data": values_2025,
+                        "borderColor": "rgb(66, 133, 244)",
+                        "backgroundColor": "rgba(66, 133, 244, 0.1)",
+                        "borderWidth": 3,
+                        "pointRadius": 5,
+                        "pointHoverRadius": 7,
+                        "fill": True
+                    }
+                ]
+            },
+            "options": {
+                "title": {
+                    "display": True,
+                    "text": f"{keyword} 검색량 추이",
+                    "fontSize": 20,
+                    "fontColor": "#333",
+                    "padding": 20
+                },
+                "legend": {
+                    "display": True,
+                    "position": "top",
+                    "labels": {
+                        "fontSize": 14,
+                        "padding": 15
+                    }
+                },
+                "scales": {
+                    "yAxes": [{
+                        "ticks": {
+                            "beginAtZero": True,
+                            "fontSize": 14
+                        },
+                        "scaleLabel": {
+                            "display": True,
+                            "labelString": "검색 지수",
+                            "fontSize": 14
+                        }
+                    }],
+                    "xAxes": [{
+                        "ticks": {
+                            "fontSize": 14
+                        }
+                    }]
+                }
+            }
+        }
+        
+        # JSON을 URL 인코딩
+        chart_json = json.dumps(chart_config)
+        encoded = urllib.parse.quote(chart_json)
+        
+        # QuickChart URL 생성 (API 키 불필요!)
+        url = f"https://quickchart.io/chart?c={encoded}&width=800&height=450&backgroundColor=white"
+        
+        logger.info(f"✅ 차트 URL 생성: {len(url)}자")
+        
+        return url
+        
+    except Exception as e:
+        logger.error(f"❌ 차트 생성 오류: {str(e)}")
+        return None
+
+#############################################
+# ✅ 카카오 차트 응답 (신규 추가)
+#############################################
+def create_kakao_chart_response(keyword, analysis):
+    """이미지 + 텍스트 조합 응답"""
+    
+    if not analysis:
+        return create_kakao_response("[검색량 비교] 조회 실패\n\n검색광고 API 오류")
+    
+    # 차트 URL 생성
+    chart_url = create_quickchart_url(analysis)
+    
+    # 차트 생성 실패 시 텍스트로 폴백
+    if not chart_url:
+        return create_kakao_response(format_comparison_analysis(analysis))
+    
+    # 요약 텍스트
+    vol_2025 = analysis["volume_2025"]
+    vol_2024 = analysis.get("volume_2024")
+    change_rate = analysis["change_rate"]
+    mobile_ratio = analysis["mobile_ratio"]
+    
+    emoji = "📈" if change_rate > 0 else "📉" if change_rate < 0 else "➡️"
+    sign = "+" if change_rate > 0 else ""
+    
+    summary = f"""[검색량 비교] {keyword}
+
+━━━━━━━━━━━━━━━━━━━━━
+📊 월간 검색량
+━━━━━━━━━━━━━━━━━━━━━
+
+2024년: {format_number(vol_2024)}회
+2025년: {format_number(vol_2025)}회
+
+전년비: {sign}{change_rate:.1f}% {emoji}
+
+━━━━━━━━━━━━━━━━━━━━━
+💡 인사이트
+━━━━━━━━━━━━━━━━━━━━━
+"""
+    
+    if change_rate >= 20:
+        summary += f"\n✅ 급성장 중 ({sign}{change_rate:.1f}%)"
+        summary += "\n→ 검색 광고 적극 추천"
+    elif change_rate >= 10:
+        summary += f"\n✅ 지속 성장 (+{change_rate:.1f}%)"
+        summary += "\n→ 광고 시작 적기"
+    elif change_rate >= -10:
+        summary += f"\n➡️ 안정 유지 ({sign}{change_rate:.1f}%)"
+        summary += "\n→ 꾸준한 마케팅"
+    else:
+        summary += f"\n⚠️ 검색 감소 ({change_rate:.1f}%)"
+        summary += "\n→ SNS 바이럴 필요"
+    
+    summary += f"\n✅ 모바일 {mobile_ratio:.0f}% - 최적화 필수"
+    
+    # 카카오 응답 (이미지 + 텍스트)
+    return jsonify({
+        "version": "2.0",
+        "template": {
+            "outputs": [
+                {
+                    "simpleImage": {
+                        "imageUrl": chart_url,
+                        "altText": f"{keyword} 검색량 비교 그래프"
+                    }
+                },
+                {
+                    "simpleText": {
+                        "text": summary
+                    }
+                }
+            ]
+        }
+    })
+
 def format_comparison_analysis(analysis):
-    """비교 분석 포맷팅 - 2024년 먼저 표시"""
+    """비교 분석 포맷팅 - 2024년 먼저 표시 (텍스트 전용)"""
     
     if not analysis:
         return "[검색량 비교] 조회 실패\n\n검색광고 API 오류"
@@ -975,7 +1148,7 @@ def format_comparison_analysis(analysis):
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
-    # ✅ 2024년 먼저 표시
+    # 2024년 먼저 표시
     if vol_2024:
         mobile_2024 = int(vol_2024 * mobile_ratio / 100)
         pc_2024 = vol_2024 - mobile_2024
@@ -985,7 +1158,7 @@ def format_comparison_analysis(analysis):
         lines.append(f"└─ PC: {format_number(pc_2024)}회 ({100-mobile_ratio:.0f}%)")
         lines.append("")
     
-    # ✅ 2025년 나중 표시
+    # 2025년 나중 표시
     lines.append(f"2025년: {format_number(vol_2025)}회")
     lines.append(f"├─ 모바일: {format_number(mobile_2025)}회 ({mobile_ratio:.0f}%)")
     lines.append(f"└─ PC: {format_number(pc_2025)}회 ({100-mobile_ratio:.0f}%)")
@@ -1014,7 +1187,7 @@ def format_comparison_analysis(analysis):
         lines.append("━━━━━━━━━━━━━━━━━━━━━")
         lines.append("")
         
-        # ✅ 2024년 먼저
+        # 2024년 먼저
         lines.append("2024년")
         for item in analysis["monthly_2024"]:
             period = item["period"]
@@ -1029,7 +1202,7 @@ def format_comparison_analysis(analysis):
         
         lines.append("")
         
-        # ✅ 2025년 나중
+        # 2025년 나중
         lines.append("2025년")
         for item in analysis["monthly_2025"]:
             period = item["period"]
@@ -1560,7 +1733,7 @@ def get_help():
 🆕 상권 분석 (전국 지원)
 ━━━━━━━━━━━━━━━━━━━━━
 
-▶ 검색량 전년 비교
+▶ 검색량 전년 비교 (차트)
 예) 비교 부평맛집
 
 ▶ 지역 유동인구
@@ -1617,11 +1790,12 @@ def kakao_skill():
         if lower_input in ["로또", "로또번호"]:
             return create_kakao_response(get_lotto())
         
+        # ✅ 비교 기능 - 차트 응답으로 변경
         if lower_input.startswith("비교 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
                 analysis = get_comparison_analysis(keyword)
-                return create_kakao_response(format_comparison_analysis(analysis))
+                return create_kakao_chart_response(keyword, analysis)
             return create_kakao_response("예) 비교 부평맛집")
         
         if lower_input.startswith("지역 "):
@@ -1720,6 +1894,91 @@ def test_compare():
 <h3>최종 출력 (글자: {len(format_comparison_analysis(analysis)) if analysis else 0}자)</h3>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{format_comparison_analysis(analysis) if analysis else '조회 실패'}</pre>
 </body></html>"""
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+# ✅ 차트 테스트 라우트 (신규 추가)
+@app.route('/test/chart')
+def test_chart():
+    keyword = request.args.get('q', '부평맛집')
+    
+    # 분석 실행
+    analysis = get_comparison_analysis(keyword)
+    
+    if not analysis:
+        return "분석 실패", 500
+    
+    # 차트 URL 생성
+    chart_url = create_quickchart_url(analysis)
+    
+    # HTML로 미리보기
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>차트 테스트: {keyword}</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+        }}
+        h2 {{
+            color: #333;
+        }}
+        .chart {{
+            margin: 30px 0;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+        .info {{
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+        }}
+        .url {{
+            word-break: break-all;
+            background: #fff;
+            padding: 10px;
+            border: 1px solid #ddd;
+            margin-top: 10px;
+            font-size: 12px;
+        }}
+    </style>
+</head>
+<body>
+    <h2>📊 검색량 비교 차트 테스트</h2>
+    <p><strong>키워드:</strong> {keyword}</p>
+    
+    <div class="chart">
+        <img src="{chart_url}" alt="검색량 비교 차트" style="width:100%">
+    </div>
+    
+    <div class="info">
+        <h3>📋 분석 데이터</h3>
+        <pre>{json.dumps(analysis, indent=2, ensure_ascii=False)}</pre>
+    </div>
+    
+    <div class="info">
+        <h3>🔗 차트 URL</h3>
+        <div class="url">{chart_url}</div>
+        <p><small>URL 길이: {len(chart_url)}자</small></p>
+    </div>
+    
+    <div class="info">
+        <h3>📱 카카오톡 미리보기</h3>
+        <p>이미지 + 텍스트 조합으로 표시됩니다.</p>
+        <ul>
+            <li>2024년: {format_number(analysis['volume_2024'])}회</li>
+            <li>2025년: {format_number(analysis['volume_2025'])}회</li>
+            <li>증감률: {analysis['change_rate']:.1f}%</li>
+        </ul>
+    </div>
+</body>
+</html>"""
+    
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 @app.route('/test/region')
