@@ -380,39 +380,36 @@ def get_ad_cost(keyword):
     return "\n".join(lines)
 
 #############################################
-# 기존 기능 4: 자동완성어 (원래 코드)
+# 기존 기능 4: 자동완성어 (수정 완료)
 #############################################
 def get_autocomplete(keyword):
-try:
-params = {"q": keyword, "con": "1", "frm": "nv", "ans": "2", "r_format": "json", "r_enc": "UTF-8", "r_unicode": "0", "t_koreng": "1", "run": "2", "rev": "4", "q_enc": "UTF-8", "st": "100"}
-headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.naver.com/"}
-response = requests.get("https://ac.search.naver.com/nx/ac", params=params, headers=headers, timeout=5)
-
-text
-
-    if response.status_code == 200:
-        suggestions = []
-        for item_group in response.json().get("items", []):
-            if isinstance(item_group, list):
-                for item in item_group:
-                    if isinstance(item, list) and item:
-                        kw = item[0][0] if isinstance(item[0], list) else item[0]
-                        if kw and kw != keyword and kw not in suggestions:
-                            suggestions.append(kw)
-                            if len(suggestions) >= 10:
-                                break
+    try:
+        params = {"q": keyword, "con": "1", "frm": "nv", "ans": "2", "r_format": "json", "r_enc": "UTF-8", "r_unicode": "0", "t_koreng": "1", "run": "2", "rev": "4", "q_enc": "UTF-8", "st": "100"}
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.naver.com/"}
+        response = requests.get("https://ac.search.naver.com/nx/ac", params=params, headers=headers, timeout=5)
         
-        if suggestions:
-            result = f"[자동완성] {keyword}\n\n"
-            for i, s in enumerate(suggestions, 1):
-                result += f"{i}. {s}\n"
-            result += f"\n※ 띄어쓰기에 따라 결과 다름"
-            return result
-except:
-    pass
-
-return f"[자동완성] {keyword}\n\n결과 없음"
-
+        if response.status_code == 200:
+            suggestions = []
+            for item_group in response.json().get("items", []):
+                if isinstance(item_group, list):
+                    for item in item_group:
+                        if isinstance(item, list) and item:
+                            kw = item[0][0] if isinstance(item[0], list) else item[0]
+                            if kw and kw != keyword and kw not in suggestions:
+                                suggestions.append(kw)
+                                if len(suggestions) >= 10:
+                                    break
+            
+            if suggestions:
+                result = f"[자동완성] {keyword}\n\n"
+                for i, s in enumerate(suggestions, 1):
+                    result += f"{i}. {s}\n"
+                result += f"\n※ 띄어쓰기에 따라 결과 다름"
+                return result
+    except:
+        pass
+    
+    return f"[자동완성] {keyword}\n\n결과 없음"
 #############################################
 # 기존 기능 5: 유튜브 자동완성
 #############################################
