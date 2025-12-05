@@ -930,7 +930,7 @@ def create_fallback_comparison(keyword):
     }
 
 def format_comparison_analysis(analysis):
-    """비교 분석 포맷팅"""
+    """비교 분석 포맷팅 - 그래프 정렬 개선"""
     
     if not analysis:
         return "[검색량 비교] 조회 실패\n\nDataLab API 오류\n잠시 후 다시 시도해주세요."
@@ -977,22 +977,39 @@ def format_comparison_analysis(analysis):
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
+    # ✅ 2025년 그래프 (정렬 개선)
     lines.append("2025년")
     for item in analysis["monthly_2025"]:
-        period = item["period"]
-        ratio = item["ratio"]
+        period = item["period"]  # "2025-06-01"
+        ratio = item["ratio"]    # 67.52
+        
+        # 월만 추출
+        month = period.split("-")[1]  # "06"
+        
+        # 값 계산 (소수점 제거)
+        value = int(ratio * 100)
+        
+        # 바 그래프
         bar_length = int(ratio / 10)
         bar = "█" * bar_length
-        lines.append(f"├─ {period}: {int(ratio * 100)} {bar}")
+        
+        # ✅ 고정폭 정렬: 월(2자리) + 값(오른쪽 정렬 6자리)
+        lines.append(f"├─ {month}월: {value:>6,} {bar}")
     
     lines.append("")
+    
+    # ✅ 2024년 그래프 (정렬 개선)
     lines.append("2024년")
     for item in analysis["monthly_2024"]:
         period = item["period"]
         ratio = item["ratio"]
+        
+        month = period.split("-")[1]
+        value = int(ratio * 100)
         bar_length = int(ratio / 10)
         bar = "█" * bar_length
-        lines.append(f"├─ {period}: {int(ratio * 100)} {bar}")
+        
+        lines.append(f"├─ {month}월: {value:>6,} {bar}")
     
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
@@ -1481,11 +1498,9 @@ def format_sales_analysis(region_input):
 #############################################
 def get_help():
     return """[사용 가이드]
-
 ━━━━━━━━━━━━━━━━━━━━━
 📊 기본 기능
 ━━━━━━━━━━━━━━━━━━━━━
-
 ▶ 키워드 검색량 (최대 5개)
 예) 부평맛집
 예) 부평맛집,강남맛집,송도카페
@@ -1493,10 +1508,10 @@ def get_help():
 ▶ 연관 검색어
 예) 연관 부평맛집
 
-▶ 자동완성어 (네이버)
+▶ 네이버 자동완성어
 예) 자동 부평맛집
 
-▶ 자동완성어 (유튜브)
+▶ 유튜브 자동완성어
 예) 유튜브 부평맛집
 
 ▶ 광고 단가 분석
@@ -1508,7 +1523,6 @@ def get_help():
 ━━━━━━━━━━━━━━━━━━━━━
 🆕 상권 분석 (전국 지원)
 ━━━━━━━━━━━━━━━━━━━━━
-
 ▶ 검색량 전년 비교
 예) 비교 부평맛집
 
@@ -1517,7 +1531,7 @@ def get_help():
 예) 지역 부평동
 예) 지역 강남역
 
-▶ 업종별 매출 ⭐ 시/구 구분
+▶ 업종별 매출 시/구 구분
 예) 매출 인천 부평동 음식점
 예) 매출 부산 서면동 카페
 예) 매출 서울 강남구 한식
@@ -1525,15 +1539,10 @@ def get_help():
 ━━━━━━━━━━━━━━━━━━━━━
 🎲 재미 기능
 ━━━━━━━━━━━━━━━━━━━━━
-
-▶ 운세
-예) 운세
-예) 운세 870114
-
-▶ 로또
+▶ 운세 & 로또
+예) 운세 or 운세 870114
 예) 로또
-
-━━━━━━━━━━━━━━━━━━━━━"""
+"""
 
 #############################################
 # 카카오 스킬
