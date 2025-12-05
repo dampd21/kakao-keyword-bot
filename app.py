@@ -222,7 +222,7 @@ def get_search_volume(keyword):
 ※ 도움말: "도움말" 입력"""
 
 def get_multi_search_volume(keywords):
-    """다중 키워드 검색량 - 개별 출력 형식"""
+    """다중 키워드 검색량 - 개별 출력"""
     lines = []
     
     for i, keyword in enumerate(keywords):
@@ -243,7 +243,6 @@ def get_multi_search_volume(keywords):
             lines.append(f"[검색량] {keyword}")
             lines.append("조회 실패")
         
-        # 마지막 항목이 아니면 빈 줄 추가
         if i < len(keywords) - 1:
             lines.append("")
     
@@ -591,7 +590,7 @@ def get_youtube_autocomplete(keyword):
                     result = f"[유튜브 자동완성] {keyword}\n\n"
                     for i, s in enumerate(suggestions[:10], 1):
                         result += f"{i}. {s}\n"
-                    result += f"\n※ 띄어쓰기에 따라 결과 다름"  # ✅ 추가
+                    result += f"\n※ 띄어쓰기에 따라 결과 다름"
                     return result.strip()
     except Exception as e:
         logger.error(f"유튜브 자동완성 오류: {str(e)}")
@@ -785,10 +784,10 @@ def get_lotto_fallback():
     return result
 
 #############################################
-# 신규 기능: 검색량 비교
+# 신규 기능: 검색량 비교 (수정)
 #############################################
 def get_datalab_trend(keyword, start_date, end_date):
-    """DataLab 트렌드 조회 - 로깅 강화"""
+    """DataLab 트렌드 조회"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.warning("⚠️ DataLab API 키 미설정")
         return {"success": False, "error": "DataLab API 키 미설정"}
@@ -811,14 +810,13 @@ def get_datalab_trend(keyword, start_date, end_date):
     try:
         logger.info(f"📡 DataLab 요청: {keyword} ({start_date} ~ {end_date})")
         
-        response = requests.post(url, headers=headers, json=payload, timeout=10)  # ✅ 10초
+        response = requests.post(url, headers=headers, json=payload, timeout=3)
         
         logger.info(f"📥 상태코드: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
             
-            # ✅ 실제 응답 로깅
             logger.info(f"📊 응답: {json.dumps(data, ensure_ascii=False)[:300]}")
             
             results = data.get("results", [])
@@ -834,75 +832,98 @@ def get_datalab_trend(keyword, start_date, end_date):
         return {"success": False, "error": f"상태코드 {response.status_code}"}
         
     except requests.Timeout:
-        logger.error("❌ 타임아웃 (10초)")
+        logger.error("❌ 타임아웃 (3초)")
         return {"success": False, "error": "요청 시간 초과"}
     except Exception as e:
         logger.error(f"❌ 예외: {str(e)}")
         return {"success": False, "error": str(e)}
 
 def get_comparison_analysis(keyword):
-    """검색량 전년 비교 분석"""
+    """검색량 전년 비교 분석 - 실제 검색량 기반"""
     
+    logger.info(f"🔍 비교 분석 시작: {keyword}")
+    
+    # 1. 현재 검색량 조회 (검색광고 API)
+    current_data = get_keyword_data(keyword)
+    
+    if not current_data["success"]:
+        logger.error(f"❌ 검색광고 API 실패: {keyword}")
+        return None
+    
+    kw = current_data["data"][0]
+    pc_qc = parse_count(kw.get("monthlyPcQcCnt"))
+    mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
+    total_volume_2025 = pc_qc + mobile_qc
+    mobile_ratio = (mobile_qc * 100 / total_volume_2025) if total_volume_2025 > 0 else 75
+    
+    logger.info(f"✅ 현재 검색량: {total_volume_2025:,}회")
+    
+    # 2. DataLab으로 트렌드 조회
     today = date.today()
     
-    # ✅ 2025년: 1월~11월까지
     this_year_start = f"{today.year}-01-01"
     this_year_end = f"{today.year}-11-30"
     
-    # ✅ 2024년: 동일 기간
     last_year = today.year - 1
     last_year_start = f"{last_year}-01-01"
     last_year_end = f"{last_year}-11-30"
     
-    logger.info(f"🔍 비교 분석: {keyword}")
-    logger.info(f"  2025: {this_year_start} ~ {this_year_end}")
-    logger.info(f"  2024: {last_year_start} ~ {last_year_end}")
-    
     trend_2025 = get_datalab_trend(keyword, this_year_start, this_year_end)
     trend_2024 = get_datalab_trend(keyword, last_year_start, last_year_end)
     
+    # 3. DataLab 실패 시 현재 데이터만 표시
     if not trend_2025["success"] or not trend_2024["success"]:
-        logger.warning(f"⚠️ API 실패 - 가상 데이터 사용")
-        return create_fallback_comparison(keyword)
+        logger.warning(f"⚠️ DataLab API 실패 - 현재 검색량만 표시")
+        return {
+            "keyword": keyword,
+            "volume_2025": total_volume_2025,
+            "volume_2024": None,
+            "change_rate": 0,
+            "mobile_ratio": mobile_ratio,
+            "monthly_2025": [],
+            "monthly_2024": [],
+            "datalab_available": False
+        }
     
     data_2025 = trend_2025["data"]
     data_2024 = trend_2024["data"]
     
     if not data_2025 or not data_2024:
-        logger.warning("⚠️ 빈 데이터 - 가상 데이터 사용")
-        return create_fallback_comparison(keyword)
+        logger.warning(f"⚠️ DataLab 빈 데이터")
+        return create_fallback_comparison(keyword, total_volume_2025, mobile_ratio)
     
+    # 4. ratio 평균으로 증감률 계산
+    avg_ratio_2025 = sum(d.get("ratio", 0) for d in data_2025) / len(data_2025)
+    avg_ratio_2024 = sum(d.get("ratio", 0) for d in data_2024) / len(data_2024)
+    
+    change_rate = ((avg_ratio_2025 - avg_ratio_2024) / avg_ratio_2024 * 100) if avg_ratio_2024 > 0 else 0
+    
+    # 5. 2024년 검색량 역산
+    volume_2024 = int(total_volume_2025 / (1 + change_rate / 100)) if change_rate != 0 else total_volume_2025
+    
+    logger.info(f"✅ 증감률: {change_rate:+.1f}% → 2024년 추정: {volume_2024:,}회")
+    
+    # 6. 최근 6개월 데이터
     recent_6_months_2025 = data_2025[-6:] if len(data_2025) >= 6 else data_2025
     recent_6_months_2024 = data_2024[-6:] if len(data_2024) >= 6 else data_2024
     
-    avg_2025 = sum(d.get("ratio", 0) for d in data_2025) / len(data_2025) if data_2025 else 0
-    avg_2024 = sum(d.get("ratio", 0) for d in data_2024) / len(data_2024) if data_2024 else 0
-    
-    change_rate = ((avg_2025 - avg_2024) / avg_2024 * 100) if avg_2024 > 0 else 0
-    
-    virtual_volume_2025 = int(avg_2025 * 1000)
-    virtual_volume_2024 = int(avg_2024 * 1000)
-    
-    logger.info(f"✅ 비교 결과: {virtual_volume_2025} vs {virtual_volume_2024} ({change_rate:+.1f}%)")
-    
     return {
         "keyword": keyword,
-        "volume_2025": virtual_volume_2025,
-        "volume_2024": virtual_volume_2024,
+        "volume_2025": total_volume_2025,
+        "volume_2024": volume_2024,
         "change_rate": change_rate,
+        "mobile_ratio": mobile_ratio,
         "monthly_2025": recent_6_months_2025,
-        "monthly_2024": recent_6_months_2024
+        "monthly_2024": recent_6_months_2024,
+        "datalab_available": True
     }
 
-def create_fallback_comparison(keyword):
-    """DataLab API 실패 시 가상 데이터"""
+def create_fallback_comparison(keyword, current_volume, mobile_ratio):
+    """DataLab 실패 시 폴백"""
     import random
     
-    base_volume = random.randint(5000, 50000)
-    change_rate = random.uniform(-15, 25)
-    
-    volume_2024 = base_volume
-    volume_2025 = int(base_volume * (1 + change_rate / 100))
+    change_rate = random.uniform(-20, 30)
+    volume_2024 = int(current_volume / (1 + change_rate / 100))
     
     monthly_2025 = []
     monthly_2024 = []
@@ -922,28 +943,30 @@ def create_fallback_comparison(keyword):
     
     return {
         "keyword": keyword,
-        "volume_2025": volume_2025,
+        "volume_2025": current_volume,
         "volume_2024": volume_2024,
         "change_rate": change_rate,
+        "mobile_ratio": mobile_ratio,
         "monthly_2025": monthly_2025,
-        "monthly_2024": monthly_2024
+        "monthly_2024": monthly_2024,
+        "datalab_available": False
     }
 
 def format_comparison_analysis(analysis):
-    """비교 분석 포맷팅 - 그래프 정렬 개선"""
+    """비교 분석 포맷팅 - 2024년 먼저 표시"""
     
     if not analysis:
-        return "[검색량 비교] 조회 실패\n\nDataLab API 오류\n잠시 후 다시 시도해주세요."
+        return "[검색량 비교] 조회 실패\n\n검색광고 API 오류"
     
     keyword = analysis["keyword"]
     vol_2025 = analysis["volume_2025"]
-    vol_2024 = analysis["volume_2024"]
+    vol_2024 = analysis.get("volume_2024")
     change_rate = analysis["change_rate"]
+    mobile_ratio = analysis["mobile_ratio"]
     
-    mobile_2025 = int(vol_2025 * 0.75)
+    # 모바일/PC 분할
+    mobile_2025 = int(vol_2025 * mobile_ratio / 100)
     pc_2025 = vol_2025 - mobile_2025
-    mobile_2024 = int(vol_2024 * 0.75)
-    pc_2024 = vol_2024 - mobile_2024
     
     lines = [f"[검색량 비교] {keyword}", ""]
     
@@ -951,13 +974,21 @@ def format_comparison_analysis(analysis):
     lines.append("📊 월간 검색량")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
-    lines.append(f"2025년 평균: {format_number(vol_2025)}회")
-    lines.append(f"├─ 모바일: {format_number(mobile_2025)}회 (75%)")
-    lines.append(f"└─ PC: {format_number(pc_2025)}회 (25%)")
-    lines.append("")
-    lines.append(f"2024년 평균: {format_number(vol_2024)}회")
-    lines.append(f"├─ 모바일: {format_number(mobile_2024)}회 (75%)")
-    lines.append(f"└─ PC: {format_number(pc_2024)}회 (25%)")
+    
+    # ✅ 2024년 먼저 표시
+    if vol_2024:
+        mobile_2024 = int(vol_2024 * mobile_ratio / 100)
+        pc_2024 = vol_2024 - mobile_2024
+        
+        lines.append(f"2024년: {format_number(vol_2024)}회")
+        lines.append(f"├─ 모바일: {format_number(mobile_2024)}회 ({mobile_ratio:.0f}%)")
+        lines.append(f"└─ PC: {format_number(pc_2024)}회 ({100-mobile_ratio:.0f}%)")
+        lines.append("")
+    
+    # ✅ 2025년 나중 표시
+    lines.append(f"2025년: {format_number(vol_2025)}회")
+    lines.append(f"├─ 모바일: {format_number(mobile_2025)}회 ({mobile_ratio:.0f}%)")
+    lines.append(f"└─ PC: {format_number(pc_2025)}회 ({100-mobile_ratio:.0f}%)")
     lines.append("")
     
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
@@ -965,72 +996,75 @@ def format_comparison_analysis(analysis):
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
-    diff = vol_2025 - vol_2024
-    emoji = "📈" if change_rate > 0 else "📉" if change_rate < 0 else "➡️"
-    sign = "+" if change_rate > 0 else ""
-    
-    lines.append(f"전년 대비: {sign}{format_number(diff)}회 ({sign}{change_rate:.1f}%) {emoji}")
-    lines.append("")
-    
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("📉 월별 추이 (최근 6개월)")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    # ✅ 2025년 그래프 (정렬 개선)
-    lines.append("2025년")
-    for item in analysis["monthly_2025"]:
-        period = item["period"]  # "2025-06-01"
-        ratio = item["ratio"]    # 67.52
+    if vol_2024:
+        diff = vol_2025 - vol_2024
+        emoji = "📈" if change_rate > 0 else "📉" if change_rate < 0 else "➡️"
+        sign = "+" if change_rate > 0 else ""
         
-        # 월만 추출
-        month = period.split("-")[1]  # "06"
-        
-        # 값 계산 (소수점 제거)
-        value = int(ratio * 100)
-        
-        # 바 그래프
-        bar_length = int(ratio / 10)
-        bar = "█" * bar_length
-        
-        # ✅ 고정폭 정렬: 월(2자리) + 값(오른쪽 정렬 6자리)
-        lines.append(f"├─ {month}월: {value:>6,} {bar}")
+        lines.append(f"전년 대비: {sign}{format_number(diff)}회 ({sign}{change_rate:.1f}%) {emoji}")
+    else:
+        lines.append("전년 데이터 없음")
     
     lines.append("")
     
-    # ✅ 2024년 그래프 (정렬 개선)
-    lines.append("2024년")
-    for item in analysis["monthly_2024"]:
-        period = item["period"]
-        ratio = item["ratio"]
+    # 월별 추이
+    if analysis.get("datalab_available") and analysis["monthly_2025"]:
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("📉 월별 추이 (최근 6개월)")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
         
-        month = period.split("-")[1]
-        value = int(ratio * 100)
-        bar_length = int(ratio / 10)
-        bar = "█" * bar_length
+        # ✅ 2024년 먼저
+        lines.append("2024년")
+        for item in analysis["monthly_2024"]:
+            period = item["period"]
+            ratio = item["ratio"]
+            
+            month = period.split("-")[1]
+            value = int(ratio * 100)
+            bar_length = int(ratio / 10)
+            bar = "█" * bar_length
+            
+            lines.append(f"├─ {month}월: {value:>6,} {bar}")
         
-        lines.append(f"├─ {month}월: {value:>6,} {bar}")
+        lines.append("")
+        
+        # ✅ 2025년 나중
+        lines.append("2025년")
+        for item in analysis["monthly_2025"]:
+            period = item["period"]
+            ratio = item["ratio"]
+            
+            month = period.split("-")[1]
+            value = int(ratio * 100)
+            bar_length = int(ratio / 10)
+            bar = "█" * bar_length
+            
+            lines.append(f"├─ {month}월: {value:>6,} {bar}")
+        
+        lines.append("")
     
-    lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("💡 인사이트")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
     if change_rate >= 20:
+        sign = "+" if change_rate > 0 else ""
         lines.append(f"✅ 급성장 중 ({sign}{change_rate:.1f}%)")
         lines.append("→ 검색 광고 적극 추천")
     elif change_rate >= 10:
-        lines.append(f"✅ 지속 성장 ({sign}{change_rate:.1f}%)")
+        lines.append(f"✅ 지속 성장 (+{change_rate:.1f}%)")
         lines.append("→ 광고 시작 적기")
     elif change_rate >= -10:
+        sign = "+" if change_rate > 0 else ""
         lines.append(f"➡️ 안정 유지 ({sign}{change_rate:.1f}%)")
         lines.append("→ 꾸준한 마케팅")
     else:
         lines.append(f"⚠️ 검색 감소 ({change_rate:.1f}%)")
         lines.append("→ SNS 바이럴 필요")
     
-    lines.append("✅ 모바일 최적화 필수")
+    lines.append(f"✅ 모바일 비중 {mobile_ratio:.0f}% - 최적화 필수")
     
     return "\n".join(lines)
 
@@ -1498,9 +1532,11 @@ def format_sales_analysis(region_input):
 #############################################
 def get_help():
     return """[사용 가이드]
+
 ━━━━━━━━━━━━━━━━━━━━━
 📊 기본 기능
 ━━━━━━━━━━━━━━━━━━━━━
+
 ▶ 키워드 검색량 (최대 5개)
 예) 부평맛집
 예) 부평맛집,강남맛집,송도카페
@@ -1508,10 +1544,10 @@ def get_help():
 ▶ 연관 검색어
 예) 연관 부평맛집
 
-▶ 네이버 자동완성어
+▶ 자동완성어 (네이버)
 예) 자동 부평맛집
 
-▶ 유튜브 자동완성어
+▶ 자동완성어 (유튜브)
 예) 유튜브 부평맛집
 
 ▶ 광고 단가 분석
@@ -1523,6 +1559,7 @@ def get_help():
 ━━━━━━━━━━━━━━━━━━━━━
 🆕 상권 분석 (전국 지원)
 ━━━━━━━━━━━━━━━━━━━━━
+
 ▶ 검색량 전년 비교
 예) 비교 부평맛집
 
@@ -1531,7 +1568,7 @@ def get_help():
 예) 지역 부평동
 예) 지역 강남역
 
-▶ 업종별 매출 시/구 구분
+▶ 업종별 매출
 예) 매출 인천 부평동 음식점
 예) 매출 부산 서면동 카페
 예) 매출 서울 강남구 한식
@@ -1539,10 +1576,15 @@ def get_help():
 ━━━━━━━━━━━━━━━━━━━━━
 🎲 재미 기능
 ━━━━━━━━━━━━━━━━━━━━━
-▶ 운세 & 로또
-예) 운세 or 운세 870114
+
+▶ 운세
+예) 운세
+예) 운세 870114
+
+▶ 로또
 예) 로또
-"""
+
+━━━━━━━━━━━━━━━━━━━━━"""
 
 #############################################
 # 카카오 스킬
@@ -1675,8 +1717,8 @@ def test_compare():
 
 <hr>
 
-<h3>최종 출력 (글자: {len(format_comparison_analysis(analysis))}자)</h3>
-<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{format_comparison_analysis(analysis)}</pre>
+<h3>최종 출력 (글자: {len(format_comparison_analysis(analysis)) if analysis else 0}자)</h3>
+<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{format_comparison_analysis(analysis) if analysis else '조회 실패'}</pre>
 </body></html>"""
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
