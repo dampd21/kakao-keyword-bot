@@ -5,13 +5,12 @@ import base64
 import time
 import requests
 import os
+import random
 import re
 import json
 import logging
-import asyncio
 from datetime import date, timedelta
 from urllib.parse import quote
-from functools import wraps
 
 app = Flask(__name__)
 
@@ -26,6 +25,8 @@ NAVER_SECRET_KEY = os.environ.get('NAVER_SECRET_KEY', '')
 NAVER_CUSTOMER_ID = os.environ.get('NAVER_CUSTOMER_ID', '')
 NAVER_CLIENT_ID = os.environ.get('NAVER_CLIENT_ID', '')
 NAVER_CLIENT_SECRET = os.environ.get('NAVER_CLIENT_SECRET', '')
+KAKAO_REST_API_KEY = os.environ.get('KAKAO_REST_API_KEY', '')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 DATA_GO_KR_API_KEY = os.environ.get('DATA_GO_KR_API_KEY', '')
 
 #############################################
@@ -66,112 +67,19 @@ def parse_count(value):
             return 0
     return 0
 
-#############################################
-# 지역 데이터
-#############################################
-REGION_DATA = {
-    "부평동": {
-        "sigunCd": "28260",
-        "sigunNm": "부평구",
-        "admCd": "2826010100",
-        "fullName": "인천광역시 부평구 부평동",
-        "commercial_area": "2826051500"
-    },
-    "부개동": {
-        "sigunCd": "28260",
-        "sigunNm": "부평구",
-        "admCd": "2826010200",
-        "fullName": "인천광역시 부평구 부개동",
-        "commercial_area": "2826051500"
-    },
-    "계산동": {
-        "sigunCd": "28245",
-        "sigunNm": "계양구",
-        "admCd": "2824510100",
-        "fullName": "인천광역시 계양구 계산동",
-        "commercial_area": "2824551500"
-    },
-    "송도동": {
-        "sigunCd": "28185",
-        "sigunNm": "연수구",
-        "admCd": "2818510800",
-        "fullName": "인천광역시 연수구 송도동",
-        "commercial_area": "2818551500"
-    },
-    "역삼동": {
-        "sigunCd": "11680",
-        "sigunNm": "강남구",
-        "admCd": "1168010100",
-        "fullName": "서울특별시 강남구 역삼동",
-        "commercial_area": "1168051000"
-    },
-    "논현동": {
-        "sigunCd": "11680",
-        "sigunNm": "강남구",
-        "admCd": "1168010600",
-        "fullName": "서울특별시 강남구 논현동",
-        "commercial_area": "1168051000"
-    },
-    "홍대": {
-        "sigunCd": "11440",
-        "sigunNm": "마포구",
-        "admCd": "1144012400",
-        "fullName": "서울특별시 마포구 동교동",
-        "commercial_area": "1144051000"
-    },
-    "서초동": {
-        "sigunCd": "11650",
-        "sigunNm": "서초구",
-        "admCd": "1165010100",
-        "fullName": "서울특별시 서초구 서초동",
-        "commercial_area": "1165051000"
-    },
-    "잠실동": {
-        "sigunCd": "11710",
-        "sigunNm": "송파구",
-        "admCd": "1171010100",
-        "fullName": "서울특별시 송파구 잠실동",
-        "commercial_area": "1171051000"
-    },
-    "우동": {
-        "sigunCd": "26260",
-        "sigunNm": "해운대구",
-        "admCd": "2626010200",
-        "fullName": "부산광역시 해운대구 우동",
-        "commercial_area": "2626051000"
-    },
-    "서면": {
-        "sigunCd": "26170",
-        "sigunNm": "부산진구",
-        "admCd": "2617010400",
-        "fullName": "부산광역시 부산진구 부전동",
-        "commercial_area": "2617051000"
-    },
-    "분당동": {
-        "sigunCd": "41135",
-        "sigunNm": "성남시 분당구",
-        "admCd": "4113510300",
-        "fullName": "경기도 성남시 분당구 분당동",
-        "commercial_area": "4113551000"
-    },
-    "백석동": {
-        "sigunCd": "41287",
-        "sigunNm": "고양시 일산동구",
-        "admCd": "4128710100",
-        "fullName": "경기도 고양시 일산동구 백석동",
-        "commercial_area": "4128751000"
-    },
-    "인계동": {
-        "sigunCd": "41111",
-        "sigunNm": "수원시 팔달구",
-        "admCd": "4111110700",
-        "fullName": "경기도 수원시 팔달구 인계동",
-        "commercial_area": "4111151000"
-    }
-}
+def format_won(value):
+    if value >= 100000000:
+        return f"{value / 100000000:.1f}억원"
+    elif value >= 10000:
+        return f"{value / 10000:.1f}만원"
+    else:
+        return f"{format_number(int(value))}원"
+
+def clean_keyword(keyword):
+    return keyword.replace(" ", "")
 
 #############################################
-# 업종 코드
+# 업종 코드 매핑
 #############################################
 INDUSTRY_CODES = {
     "음식점": {"code": "Q", "name": "음식점업"},
@@ -202,7 +110,7 @@ INDUSTRY_CODES = {
 }
 
 #############################################
-# 네이버 API 헤더
+# 네이버 검색광고 API
 #############################################
 def get_naver_api_headers(method="GET", uri="/keywordstool"):
     timestamp = str(int(time.time() * 1000))
@@ -217,8 +125,516 @@ def get_naver_api_headers(method="GET", uri="/keywordstool"):
         "X-Signature": signature_base64
     }
 
+def get_keyword_data(keyword, retry=1):
+    """키워드 데이터 조회"""
+    if not validate_required_keys():
+        return {"success": False, "error": "API 키가 설정되지 않았습니다."}
+    
+    base_url = "https://api.searchad.naver.com"
+    uri = "/keywordstool"
+    params = {"hintKeywords": keyword, "showDetail": "1"}
+    
+    for attempt in range(retry + 1):
+        try:
+            headers = get_naver_api_headers("GET", uri)
+            response = requests.get(base_url + uri, headers=headers, params=params, timeout=3)
+            
+            if response.status_code == 200:
+                data = response.json()
+                keyword_list = data.get("keywordList", [])
+                if keyword_list:
+                    return {"success": True, "data": keyword_list}
+                return {"success": False, "error": "검색 결과가 없습니다."}
+            
+            if attempt < retry:
+                time.sleep(0.3)
+                continue
+            
+            return {"success": False, "error": f"API 오류 ({response.status_code})"}
+            
+        except requests.Timeout:
+            if attempt < retry:
+                time.sleep(0.3)
+                continue
+            return {"success": False, "error": "요청 시간 초과"}
+        except Exception as e:
+            logger.error(f"키워드 조회 오류: {str(e)}")
+            return {"success": False, "error": str(e)}
+
+def get_performance_estimate(keyword, bids, device='MOBILE', retry=1):
+    """성과 예측 API"""
+    uri = '/estimate/performance/keyword'
+    url = f'https://api.searchad.naver.com{uri}'
+    payload = {
+        "device": device,
+        "keywordplus": False,
+        "key": keyword,
+        "bids": bids if isinstance(bids, list) else [bids]
+    }
+    
+    for attempt in range(retry + 1):
+        try:
+            headers = get_naver_api_headers('POST', uri)
+            response = requests.post(url, headers=headers, json=payload, timeout=5)
+            
+            if response.status_code == 200:
+                return {"success": True, "data": response.json()}
+            
+            if attempt < retry:
+                time.sleep(0.3)
+                continue
+            
+            return {"success": False, "error": response.text}
+            
+        except requests.Timeout:
+            if attempt < retry:
+                time.sleep(0.3)
+                continue
+            return {"success": False, "error": "요청 시간 초과"}
+        except Exception as e:
+            logger.error(f"성과 예측 오류: {str(e)}")
+            return {"success": False, "error": str(e)}
+
 #############################################
-# 기능 1: 비교 [키워드]
+# 기존 기능 1: 검색량 조회
+#############################################
+def get_search_volume(keyword):
+    if "," in keyword:
+        keywords = [k.strip() for k in keyword.split(",")]
+        if len(keywords) > 5:
+            return "최대 5개 키워드까지만 조회 가능합니다."
+        return get_multi_search_volume(keywords[:5])
+    
+    result = get_keyword_data(keyword)
+    if not result["success"]:
+        return f"조회 실패: {result['error']}"
+    
+    kw = result["data"][0]
+    pc = parse_count(kw.get("monthlyPcQcCnt"))
+    mobile = parse_count(kw.get("monthlyMobileQcCnt"))
+    total = pc + mobile
+    
+    return f"""[검색량] {kw.get('relKeyword', keyword)}
+월간 총 {format_number(total)}회
+ㄴ 모바일: {format_number(mobile)}회
+ㄴ PC: {format_number(pc)}회
+
+※ 도움말: "도움말" 입력"""
+
+def get_multi_search_volume(keywords):
+    """다중 키워드 검색량"""
+    lines = ["[검색량 비교]", ""]
+    
+    for keyword in keywords:
+        keyword = keyword.replace(" ", "")
+        result = get_keyword_data(keyword)
+        
+        if result["success"]:
+            kw = result["data"][0]
+            pc = parse_count(kw.get("monthlyPcQcCnt"))
+            mobile = parse_count(kw.get("monthlyMobileQcCnt"))
+            total = pc + mobile
+            mobile_ratio = (mobile * 100 // total) if total > 0 else 0
+            
+            lines.append(f"▸ {kw.get('relKeyword', keyword)}")
+            lines.append(f"  {format_number(total)}회 (모바일 {mobile_ratio}%)")
+        else:
+            lines.append(f"▸ {keyword}")
+            lines.append(f"  조회 실패")
+        lines.append("")
+    
+    return "\n".join(lines).strip()
+
+#############################################
+# 기존 기능 2: 연관 키워드
+#############################################
+def get_related_keywords(keyword):
+    try:
+        url = f"https://search.naver.com/search.naver?where=nexearch&query={requests.utils.quote(keyword)}"
+        headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "ko-KR,ko;q=0.9"}
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            pattern = re.findall(r'<div class="tit">([^<]+)</div>', response.text)
+            seen = set()
+            related = []
+            for kw in pattern:
+                kw = kw.strip()
+                if kw and kw != keyword and kw not in seen and len(kw) > 1:
+                    seen.add(kw)
+                    related.append(kw)
+                    if len(related) >= 10:
+                        break
+            
+            if related:
+                result = f"[연관검색어] {keyword}\n\n"
+                for i, kw in enumerate(related, 1):
+                    result += f"{i}. {kw}\n"
+                return result.strip()
+        
+        return get_related_keywords_api(keyword)
+    except:
+        return get_related_keywords_api(keyword)
+
+def get_related_keywords_api(keyword):
+    result = get_keyword_data(keyword)
+    if not result["success"]:
+        return f"조회 실패: {result['error']}"
+    
+    keyword_list = result["data"][:10]
+    response = f"[연관키워드] {keyword}\n\n"
+    
+    for i, kw in enumerate(keyword_list, 1):
+        name = kw.get("relKeyword", "")
+        total = parse_count(kw.get("monthlyPcQcCnt")) + parse_count(kw.get("monthlyMobileQcCnt"))
+        response += f"{i}. {name} ({format_number(total)})\n"
+    
+    return response.strip()
+
+#############################################
+# 기존 기능 3: 광고 단가
+#############################################
+def get_ad_cost(keyword):
+    result = get_keyword_data(keyword)
+    if not result["success"]:
+        return f"조회 실패: {result['error']}"
+    
+    kw = result["data"][0]
+    keyword_name = kw.get('relKeyword', keyword)
+    pc_qc = parse_count(kw.get("monthlyPcQcCnt"))
+    mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
+    total_qc = pc_qc + mobile_qc
+    mobile_ratio = (mobile_qc * 100 // total_qc) if total_qc > 0 else 0
+    comp_idx = kw.get("compIdx", "중간")
+    
+    comp_emoji = "🔴" if comp_idx == "높음" else "🟡" if comp_idx == "중간" else "🟢"
+    
+    lines = [f"💰 \"{keyword_name}\" 광고 분석", ""]
+    
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("📊 키워드 정보")
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("")
+    lines.append(f"경쟁도: {comp_idx} {comp_emoji}")
+    lines.append(f"월간 검색량: {format_number(total_qc)}회")
+    lines.append(f"├ 모바일: {format_number(mobile_qc)}회 ({mobile_ratio}%)")
+    lines.append(f"└ PC: {format_number(pc_qc)}회 ({100-mobile_ratio}%)")
+    lines.append("")
+    
+    test_bids = [100, 200, 300, 400, 500, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000]
+    
+    mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
+    
+    efficient_bid = None
+    efficient_clicks = 0
+    efficient_cost = 0
+    
+    if mobile_perf.get("success"):
+        mobile_estimates = mobile_perf["data"].get("estimate", [])
+        valid_estimates = [e for e in mobile_estimates if e.get('clicks', 0) > 0]
+        
+        if valid_estimates:
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("📱 모바일 성과 분석")
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("")
+            
+            max_clicks = max(e.get('clicks', 0) for e in valid_estimates)
+            
+            # 대표 입찰가 5개 선택
+            selected = []
+            ratios = [0.3, 0.5, 0.7, 0.9, 1.0]
+            for ratio in ratios:
+                target = int(max_clicks * ratio)
+                closest = min(valid_estimates, key=lambda x: abs(x.get('clicks', 0) - target))
+                if closest not in selected:
+                    selected.append(closest)
+            
+            for est in selected[:5]:
+                bid = est.get('bid', 0)
+                clicks = est.get('clicks', 0)
+                cost = est.get('cost', 0) or int(clicks * bid * 0.8)
+                lines.append(f"{format_number(bid)}원 → 월 {clicks}회 | {format_won(cost)}")
+            
+            lines.append("")
+            
+            # 추천 입찰가 (70~80% 효율)
+            if len(selected) >= 4:
+                efficient_est = selected[3]
+                efficient_bid = efficient_est.get('bid', 0)
+                efficient_clicks = efficient_est.get('clicks', 0)
+                efficient_cost = efficient_est.get('cost', 0) or int(efficient_clicks * efficient_bid * 0.8)
+    
+    if efficient_bid:
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("🎯 추천 입찰가")
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("")
+        lines.append(f"✅ 추천: {format_number(efficient_bid)}원")
+        lines.append(f"├ 예상 클릭: 월 {efficient_clicks}회")
+        lines.append(f"├ 예상 비용: {format_won(efficient_cost)}")
+        
+        cpc = int(efficient_cost / efficient_clicks) if efficient_clicks > 0 else 0
+        lines.append(f"└ 클릭당: 약 {format_number(cpc)}원")
+    
+    return "\n".join(lines)
+
+#############################################
+# 기존 기능 4: 자동완성어
+#############################################
+def get_autocomplete(keyword):
+    try:
+        params = {"q": keyword, "con": "1", "frm": "nv", "ans": "2", "r_format": "json"}
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.naver.com/"}
+        response = requests.get("https://ac.search.naver.com/nx/ac", params=params, headers=headers, timeout=3)
+        
+        if response.status_code == 200:
+            suggestions = []
+            for item_group in response.json().get("items", []):
+                if isinstance(item_group, list):
+                    for item in item_group:
+                        if isinstance(item, list) and item:
+                            kw = item[0][0] if isinstance(item[0], list) else item[0]
+                            if kw and kw != keyword and kw not in suggestions:
+                                suggestions.append(kw)
+                                if len(suggestions) >= 10:
+                                    break
+            
+            if suggestions:
+                result = f"[자동완성] {keyword}\n\n"
+                for i, s in enumerate(suggestions, 1):
+                    result += f"{i}. {s}\n"
+                return result.strip()
+    except:
+        pass
+    
+    return f"[자동완성] {keyword}\n\n결과 없음"
+
+#############################################
+# 기존 기능 5: 유튜브 자동완성
+#############################################
+def get_youtube_autocomplete(keyword):
+    try:
+        url = "https://suggestqueries.google.com/complete/search"
+        params = {"client": "youtube", "ds": "yt", "q": keyword, "hl": "ko", "gl": "kr"}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        
+        response = requests.get(url, params=params, headers=headers, timeout=3)
+        
+        if response.status_code == 200:
+            text = response.text
+            start_idx = text.find('(')
+            end_idx = text.rfind(')')
+            if start_idx != -1 and end_idx != -1:
+                json_str = text[start_idx + 1:end_idx]
+                data = json.loads(json_str)
+                
+                suggestions = []
+                if len(data) > 1 and isinstance(data[1], list):
+                    for item in data[1]:
+                        if isinstance(item, list) and len(item) > 0:
+                            suggestion = item[0]
+                            if suggestion and suggestion != keyword:
+                                suggestions.append(suggestion)
+                
+                if suggestions:
+                    result = f"[유튜브 자동완성] {keyword}\n\n"
+                    for i, s in enumerate(suggestions[:10], 1):
+                        result += f"{i}. {s}\n"
+                    return result.strip()
+    except Exception as e:
+        logger.error(f"유튜브 자동완성 오류: {str(e)}")
+    
+    return f"[유튜브 자동완성] {keyword}\n\n결과 없음"
+
+#############################################
+# 기존 기능 6: 대표키워드
+#############################################
+def extract_place_id_from_url(url_or_id):
+    url_or_id = url_or_id.strip()
+    if url_or_id.isdigit():
+        return url_or_id
+    
+    patterns = [r'/restaurant/(\d+)', r'/place/(\d+)', r'/cafe/(\d+)', r'=(\d{10,})']
+    for pattern in patterns:
+        match = re.search(pattern, url_or_id)
+        if match and len(match.group(1)) >= 7:
+            return match.group(1)
+    
+    match = re.search(r'\d{7,}', url_or_id)
+    return match.group(0) if match else None
+
+def get_place_keywords(place_id):
+    headers = {"User-Agent": "Mozilla/5.0 (iPhone)", "Accept-Language": "ko-KR,ko;q=0.9"}
+    
+    for category in ['restaurant', 'place', 'cafe']:
+        try:
+            url = f"https://m.place.naver.com/{category}/{place_id}/home"
+            response = requests.get(url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                html = response.content.decode('utf-8', errors='ignore')
+                match = re.search(r'"keywordList"\s*:\s*\[((?:"[^"]*",?\s*)*)\]', html)
+                if match:
+                    keywords = json.loads("[" + match.group(1) + "]")
+                    if keywords:
+                        return {"success": True, "keywords": keywords}
+        except:
+            pass
+    
+    return {"success": False, "error": "대표키워드를 찾을 수 없습니다."}
+
+def format_place_keywords(input_str):
+    place_id = extract_place_id_from_url(input_str.strip())
+    
+    if not place_id:
+        return f"[대표키워드] 조회 실패\n\n플레이스 ID를 찾을 수 없습니다.\n\n예) 대표 1529801174"
+    
+    result = get_place_keywords(place_id)
+    
+    if not result["success"]:
+        return f"[대표키워드] 조회 실패\n\n{result['error']}"
+    
+    keywords = result["keywords"]
+    response = f"[대표키워드] {place_id}\n\n"
+    for i, kw in enumerate(keywords, 1):
+        response += f"{i}. {kw}\n"
+    response += f"\n복사용: {', '.join(keywords)}"
+    
+    return response
+
+#############################################
+# 기존 기능 7: 운세
+#############################################
+def get_fortune(birthdate=None):
+    if not GEMINI_API_KEY:
+        return get_fortune_fallback(birthdate)
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    if birthdate:
+        if len(birthdate) == 6:
+            year = f"19{birthdate[:2]}" if int(birthdate[:2]) > 30 else f"20{birthdate[:2]}"
+            month, day = birthdate[2:4], birthdate[4:6]
+        elif len(birthdate) == 8:
+            year, month, day = birthdate[:4], birthdate[4:6], birthdate[6:8]
+        else:
+            return get_fortune()
+        
+        prompt = f"""생년월일 {year}년 {month}월 {day}일생의 오늘 운세를 알려줘.
+형식:
+[운세] {year}년 {month}월 {day}일생
+
+총운: (2줄)
+애정운: (1줄)
+금전운: (1줄)
+직장운: (1줄)
+
+행운의 숫자: (1-45 숫자 3개)
+행운의 색: (1개)
+
+재미있고 긍정적으로. 이모티콘 없이."""
+    else:
+        prompt = """오늘의 운세를 알려줘.
+형식:
+[오늘의 운세]
+
+총운: (2줄)
+애정운: (1줄)
+금전운: (1줄)
+직장운: (1줄)
+
+행운의 숫자: (1-45 숫자 3개)
+행운의 색: (1개)
+
+재미있고 긍정적으로. 이모티콘 없이."""
+    
+    try:
+        response = requests.post(url, json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 500}
+        }, timeout=4)
+        if response.status_code == 200:
+            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    except:
+        pass
+    
+    return get_fortune_fallback(birthdate)
+
+def get_fortune_fallback(birthdate=None):
+    fortunes = ["오늘은 새로운 기회가 찾아오는 날!", "좋은 소식이 들려올 예정이에요."]
+    love = ["설레는 만남이 있을 수 있어요", "소중한 사람과 대화를 나눠보세요"]
+    money = ["작은 횡재수가 있어요", "절약이 미덕인 날"]
+    work = ["집중력이 높아지는 시간", "새 프로젝트에 도전해보세요"]
+    lucky_numbers = sorted(random.sample(range(1, 46), 3))
+    colors = ["빨간색", "파란색", "노란색", "초록색", "보라색"]
+    
+    if birthdate and len(birthdate) in [6, 8]:
+        if len(birthdate) == 6:
+            year = f"19{birthdate[:2]}" if int(birthdate[:2]) > 30 else f"20{birthdate[:2]}"
+            month, day = birthdate[2:4], birthdate[4:6]
+        else:
+            year, month, day = birthdate[:4], birthdate[4:6], birthdate[6:8]
+        
+        return f"""[운세] {year}년 {month}월 {day}일생
+총운: {random.choice(fortunes)}
+애정운: {random.choice(love)}
+금전운: {random.choice(money)}
+직장운: {random.choice(work)}
+
+행운의 숫자: {lucky_numbers[0]}, {lucky_numbers[1]}, {lucky_numbers[2]}
+행운의 색: {random.choice(colors)}"""
+    
+    return f"""[오늘의 운세]
+총운: {random.choice(fortunes)}
+애정운: {random.choice(love)}
+금전운: {random.choice(money)}
+직장운: {random.choice(work)}
+
+행운의 숫자: {lucky_numbers[0]}, {lucky_numbers[1]}, {lucky_numbers[2]}
+행운의 색: {random.choice(colors)}"""
+
+#############################################
+# 기존 기능 8: 로또
+#############################################
+def get_lotto():
+    if not GEMINI_API_KEY:
+        return get_lotto_fallback()
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    prompt = """로또 번호 5세트 추천. 1~45, 각 6개, 오름차순.
+형식:
+[로또 번호 추천]
+
+00, 00, 00, 00, 00, 00
+00, 00, 00, 00, 00, 00
+00, 00, 00, 00, 00, 00
+00, 00, 00, 00, 00, 00
+00, 00, 00, 00, 00, 00
+
+행운을 빕니다!"""
+    
+    try:
+        response = requests.post(url, json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 1.0, "maxOutputTokens": 400}
+        }, timeout=4)
+        if response.status_code == 200:
+            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    except:
+        pass
+    
+    return get_lotto_fallback()
+
+def get_lotto_fallback():
+    result = "[로또 번호 추천]\n\n"
+    for i in range(1, 6):
+        numbers = sorted(random.sample(range(1, 46), 6))
+        result += f"{', '.join(str(n).zfill(2) for n in numbers)}\n"
+    result += "\n행운을 빕니다!\n※ 재미로만 즐기세요!"
+    return result
+
+#############################################
+# 신규 기능 1: 비교 [키워드]
 #############################################
 def get_datalab_trend(keyword, start_date, end_date):
     """DataLab 트렌드 조회"""
@@ -257,39 +673,31 @@ def get_datalab_trend(keyword, start_date, end_date):
 def get_comparison_analysis(keyword):
     """검색량 전년 비교 분석"""
     
-    # 올해 데이터
     today = date.today()
     this_year_start = f"{today.year}-{today.month:02d}-01"
     this_year_end = today.strftime("%Y-%m-%d")
     
-    # 작년 데이터
     last_year = today.year - 1
     last_year_start = f"{last_year}-{today.month:02d}-01"
     last_year_end = f"{last_year}-{today.month:02d}-{today.day:02d}"
     
-    # 병렬 조회는 간단히 순차로 처리 (동기)
     trend_2025 = get_datalab_trend(keyword, this_year_start, this_year_end)
     trend_2024 = get_datalab_trend(keyword, last_year_start, last_year_end)
     
     if not trend_2025["success"] or not trend_2024["success"]:
         return None
     
-    # 월별 데이터 계산
     data_2025 = trend_2025["data"]
     data_2024 = trend_2024["data"]
     
-    # 최근 6개월
     recent_6_months_2025 = data_2025[-6:] if len(data_2025) >= 6 else data_2025
     recent_6_months_2024 = data_2024[-6:] if len(data_2024) >= 6 else data_2024
     
-    # 평균 계산 (ratio 기반, 실제 검색량은 비율로만 제공됨)
     avg_2025 = sum(d.get("ratio", 0) for d in data_2025) / len(data_2025) if data_2025 else 0
     avg_2024 = sum(d.get("ratio", 0) for d in data_2024) / len(data_2024) if data_2024 else 0
     
-    # 증감률
     change_rate = ((avg_2025 - avg_2024) / avg_2024 * 100) if avg_2024 > 0 else 0
     
-    # 가상 검색량 (ratio를 100배 스케일링)
     virtual_volume_2025 = int(avg_2025 * 100)
     virtual_volume_2024 = int(avg_2024 * 100)
     
@@ -306,14 +714,13 @@ def format_comparison_analysis(analysis):
     """비교 분석 포맷팅"""
     
     if not analysis:
-        return "[검색량 비교] 조회 실패\n\nDataLab API 오류가 발생했습니다.\n잠시 후 다시 시도해주세요."
+        return "[검색량 비교] 조회 실패\n\nDataLab API 오류\n잠시 후 다시 시도해주세요."
     
     keyword = analysis["keyword"]
     vol_2025 = analysis["volume_2025"]
     vol_2024 = analysis["volume_2024"]
     change_rate = analysis["change_rate"]
     
-    # 모바일/PC 비율 (가정: 모바일 75%)
     mobile_2025 = int(vol_2025 * 0.75)
     pc_2025 = vol_2025 - mobile_2025
     mobile_2024 = int(vol_2024 * 0.75)
@@ -376,46 +783,196 @@ def format_comparison_analysis(analysis):
     
     if change_rate >= 20:
         lines.append(f"✅ 급성장 중 ({sign}{change_rate:.1f}%)")
-        lines.append("✅ 검색 광고 적극 추천")
+        lines.append("→ 검색 광고 적극 추천")
     elif change_rate >= 10:
-        lines.append(f"✅ 지속 성장 중 ({sign}{change_rate:.1f}%)")
-        lines.append("→ 검색 광고 시작 적기")
+        lines.append(f"✅ 지속 성장 ({sign}{change_rate:.1f}%)")
+        lines.append("→ 광고 시작 적기")
     elif change_rate >= -10:
-        lines.append(f"➡️ 안정적 유지 ({sign}{change_rate:.1f}%)")
-        lines.append("→ 꾸준한 마케팅 필요")
+        lines.append(f"➡️ 안정 유지 ({sign}{change_rate:.1f}%)")
+        lines.append("→ 꾸준한 마케팅")
     else:
-        lines.append(f"⚠️ 검색 감소 중 ({change_rate:.1f}%)")
+        lines.append(f"⚠️ 검색 감소 ({change_rate:.1f}%)")
         lines.append("→ SNS 바이럴 필요")
     
-    lines.append("✅ 모바일 최적화 필수 (75%)")
+    lines.append("✅ 모바일 최적화 필수")
     
     return "\n".join(lines)
 
 #############################################
-# 기능 2: 지역 [동]
+# 신규 기능 2: Kakao API 지역 검색
+#############################################
+def search_kakao_region(region_keyword):
+    """
+    Kakao Local API로 지역 검색 → 행정코드 반환
+    """
+    
+    if not KAKAO_REST_API_KEY:
+        return {"success": False, "error": "Kakao API 키 미설정"}
+    
+    headers = {"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"}
+    
+    # 1단계: Kakao Local 키워드 검색
+    try:
+        url = "https://dapi.kakao.com/v2/local/search/keyword.json"
+        params = {"query": region_keyword, "size": 1}
+        
+        response = requests.get(url, headers=headers, params=params, timeout=3)
+        
+        if response.status_code == 200:
+            data = response.json()
+            documents = data.get("documents", [])
+            
+            if documents:
+                doc = documents[0]
+                x = doc.get("x")  # 경도
+                y = doc.get("y")  # 위도
+                
+                # 2단계: 좌표 → 행정구역 코드 변환
+                region_code_result = kakao_coord_to_region(x, y)
+                
+                if region_code_result["success"]:
+                    return region_code_result
+        
+        # Local 검색 실패 시 주소 검색 시도
+        return kakao_address_search(region_keyword)
+        
+    except Exception as e:
+        logger.error(f"Kakao Local 검색 오류: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+def kakao_coord_to_region(x, y):
+    """
+    Kakao 좌표 → 행정구역 코드 API
+    """
+    
+    headers = {"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"}
+    
+    try:
+        url = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
+        params = {"x": x, "y": y}
+        
+        response = requests.get(url, headers=headers, params=params, timeout=3)
+        
+        if response.status_code == 200:
+            data = response.json()
+            documents = data.get("documents", [])
+            
+            # H 타입 (행정동) 우선
+            for doc in documents:
+                if doc.get("region_type") == "H":
+                    code = doc.get("code")
+                    address_name = doc.get("address_name")
+                    
+                    parts = address_name.split()
+                    
+                    return {
+                        "success": True,
+                        "admCd": code,                    # 행정구역코드 (10자리)
+                        "sigunCd": code[:5],              # 시군구코드 (5자리)
+                        "sigunNm": parts[1] if len(parts) > 1 else "",
+                        "fullName": address_name,
+                        "dongNm": parts[2] if len(parts) > 2 else "",
+                        "x": x,
+                        "y": y
+                    }
+            
+            # H 타입 없으면 B 타입 (법정동)
+            for doc in documents:
+                if doc.get("region_type") == "B":
+                    code = doc.get("code")
+                    address_name = doc.get("address_name")
+                    
+                    parts = address_name.split()
+                    
+                    return {
+                        "success": True,
+                        "admCd": code,
+                        "sigunCd": code[:5],
+                        "sigunNm": parts[1] if len(parts) > 1 else "",
+                        "fullName": address_name,
+                        "dongNm": parts[2] if len(parts) > 2 else "",
+                        "x": x,
+                        "y": y
+                    }
+        
+        return {"success": False, "error": "행정구역 코드 변환 실패"}
+        
+    except Exception as e:
+        logger.error(f"좌표 변환 오류: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+def kakao_address_search(region_keyword):
+    """
+    Kakao 주소 검색 API
+    """
+    
+    headers = {"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"}
+    
+    try:
+        url = "https://dapi.kakao.com/v2/local/search/address.json"
+        params = {"query": region_keyword, "size": 1}
+        
+        response = requests.get(url, headers=headers, params=params, timeout=3)
+        
+        if response.status_code == 200:
+            data = response.json()
+            documents = data.get("documents", [])
+            
+            if documents:
+                doc = documents[0]
+                x = doc.get("x")
+                y = doc.get("y")
+                
+                # 좌표 → 행정코드 변환
+                return kakao_coord_to_region(x, y)
+        
+        return {"success": False, "error": "주소를 찾을 수 없습니다"}
+        
+    except Exception as e:
+        logger.error(f"주소 검색 오류: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+#############################################
+# 신규 기능 3: 지역 [동]
 #############################################
 def get_population_data(region_data):
-    """유동인구 데이터 조회 (가상 데이터)"""
+    """
+    유동인구 데이터 조회
+    공공데이터 API 연동 준비
+    """
     
-    # 실제 공공데이터 API 호출 시뮬레이션
-    # 실제로는 API 호출 필요
+    # 공공데이터 API 사용 시
+    if DATA_GO_KR_API_KEY:
+        # TODO: 실제 API 연동
+        # url = "https://api.odcloud.kr/api/15071311/v1/생활인구"
+        # params = {"serviceKey": DATA_GO_KR_API_KEY, "admCd": region_data["admCd"]}
+        pass
     
+    # 가상 데이터 (Fallback)
     import random
     
-    # 지역별 기본 유동인구 (가상)
-    base_population = {
-        "부평동": 8200,
-        "역삼동": 15000,
-        "홍대": 25000,
-        "송도동": 12000
+    # 지역별 기본 유동인구 추정
+    base_pop_map = {
+        "강남": 15000, "역삼": 15000, "논현": 12000,
+        "홍대": 25000, "동교": 25000,
+        "부평": 8200, "삼산": 7000,
+        "송도": 12000,
+        "해운대": 18000, "우동": 18000,
+        "서면": 16000, "부전": 16000
     }
     
-    region_name = region_data.get("fullName", "").split()[-1]
-    daily_avg = base_population.get(region_name, 10000)
+    # 동명에서 키워드 추출
+    dong_name = region_data.get("dongNm", "")
+    base_pop = 10000
+    
+    for key, pop in base_pop_map.items():
+        if key in dong_name:
+            base_pop = pop
+            break
     
     return {
         "success": True,
-        "daily_avg": daily_avg,
+        "daily_avg": base_pop,
         "by_age": {
             "10s": random.randint(5, 10),
             "20s": random.randint(25, 35),
@@ -428,29 +985,28 @@ def get_population_data(region_data):
             "female": random.randint(48, 55)
         },
         "by_time": {
-            "0709": int(daily_avg * 0.22),
-            "1213": int(daily_avg * 0.29),
-            "1819": int(daily_avg * 0.34),
-            "2022": int(daily_avg * 0.15)
+            "0709": int(base_pop * 0.22),
+            "1213": int(base_pop * 0.29),
+            "1819": int(base_pop * 0.34),
+            "2022": int(base_pop * 0.15)
         },
         "weekday_vs_weekend": {
-            "weekday": int(daily_avg * 1.07),
-            "weekend": int(daily_avg * 0.88)
+            "weekday": int(base_pop * 1.07),
+            "weekend": int(base_pop * 0.88)
         }
     }
 
-def format_region_analysis(region_name):
+def format_region_analysis(region_keyword):
     """지역 분석 포맷팅"""
     
-    if region_name not in REGION_DATA:
-        available = ", ".join(list(REGION_DATA.keys())[:10])
-        return f"[지역분석] 오류\n\n'{region_name}' 지역을 찾을 수 없습니다.\n\n사용 가능한 지역:\n{available}\n\n예) 지역 부평동"
+    # Kakao API로 지역 검색
+    region_data = search_kakao_region(region_keyword)
     
-    region_data = REGION_DATA[region_name]
+    if not region_data["success"]:
+        return f"[지역분석] 오류\n\n'{region_keyword}' 지역을 찾을 수 없습니다.\n\n예) 지역 홍대\n예) 지역 부평동\n예) 지역 강남역"
+    
+    # 유동인구 조회
     pop_data = get_population_data(region_data)
-    
-    if not pop_data["success"]:
-        return "[지역분석] 조회 실패\n\n유동인구 데이터를 가져올 수 없습니다."
     
     lines = [f"[지역분석] {region_data['fullName']}", ""]
     
@@ -479,9 +1035,9 @@ def format_region_analysis(region_name):
     lines.append("")
     lines.append("시간대별:")
     time_data = pop_data["by_time"]
-    lines.append(f"├─ 07-09시: {format_number(time_data['0709'])}명 (출근)")
-    lines.append(f"├─ 12-13시: {format_number(time_data['1213'])}명 (점심) 🔥")
-    lines.append(f"├─ 18-19시: {format_number(time_data['1819'])}명 (퇴근) 🔥")
+    lines.append(f"├─ 07-09시: {format_number(time_data['0709'])}명")
+    lines.append(f"├─ 12-13시: {format_number(time_data['1213'])}명 🔥")
+    lines.append(f"├─ 18-19시: {format_number(time_data['1819'])}명 🔥")
     lines.append(f"└─ 20-22시: {format_number(time_data['2022'])}명")
     
     lines.append("")
@@ -497,30 +1053,29 @@ def format_region_analysis(region_name):
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
-    # 지역별 특성 (하드코딩)
-    characteristics = {
-        "부평동": {
-            "facilities": ["부평역 300m", "부평문화의거리", "오피스 빌딩 밀집"],
-            "nature": "직장인 중심",
-            "strength": ["역세권", "20-30대 58%", "평일 집중"],
-            "weakness": ["주말 유동인구 감소", "주차 부족"]
-        }
-    }
+    # 동적 입지 특성 (간단 버전)
+    dong_name = region_data.get("dongNm", "")
     
-    char = characteristics.get(region_name, {
-        "facilities": ["상권 정보 수집 중"],
-        "nature": "분석 중",
-        "strength": ["데이터 분석 중"],
-        "weakness": ["데이터 분석 중"]
-    })
+    if "역삼" in dong_name or "강남" in dong_name:
+        facilities = ["오피스 밀집", "대기업 본사"]
+        strength = ["고소득층", "직장인 밀집"]
+        weakness = ["높은 임대료", "치열한 경쟁"]
+    elif "홍대" in dong_name or "동교" in dong_name:
+        facilities = ["대학가", "클럽/공연장"]
+        strength = ["젊은층", "유동인구 많음"]
+        weakness = ["주말 집중", "소음"]
+    elif "부평" in dong_name or "삼산" in dong_name:
+        facilities = ["역세권", "주거 복합"]
+        strength = ["안정적 수요", "평일 강세"]
+        weakness = ["주말 약세", "주차 부족"]
+    else:
+        facilities = ["데이터 수집 중"]
+        strength = ["분석 중"]
+        weakness = ["분석 중"]
     
     lines.append("주요 시설:")
-    for fac in char["facilities"]:
+    for fac in facilities:
         lines.append(f"• {fac}")
-    
-    lines.append("")
-    lines.append("상권 성격:")
-    lines.append(f"• {char['nature']}")
     
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
@@ -529,44 +1084,45 @@ def format_region_analysis(region_name):
     lines.append("")
     
     lines.append("✅ 강점")
-    for s in char["strength"]:
+    for s in strength:
         lines.append(f"• {s}")
     
     lines.append("")
     lines.append("⚠️ 약점")
-    for w in char["weakness"]:
+    for w in weakness:
         lines.append(f"• {w}")
     
     lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("🎯 업종별 입지 적합도")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
+    lines.append("🎯 업종 적합도")
     lines.append("음식점: ⭐⭐⭐⭐⭐")
-    lines.append("• 점심/저녁 피크 강함")
-    lines.append("")
     lines.append("카페: ⭐⭐⭐⭐")
-    lines.append("• 오전 TO-GO 수요")
-    lines.append("")
     lines.append("소매: ⭐⭐⭐")
-    lines.append("• 퇴근시간 활용")
     
     return "\n".join(lines)
 
 #############################################
-# 기능 3: 매출 [동] [업종]
+# 신규 기능 4: 매출 [동] [업종]
 #############################################
 def get_business_data(region_data, industry_keyword):
-    """상가업소 데이터 조회 (가상)"""
+    """
+    상가업소 데이터 조회
+    공공데이터 API 연동 준비
+    """
     
-    import random
-    
-    # 업종 코드 매칭
     industry_info = INDUSTRY_CODES.get(industry_keyword)
     if not industry_info:
-        return {"success": False, "error": "업종을 찾을 수 없습니다"}
+        return {"success": False, "error": "업종 없음"}
     
-    # 가상 데이터
+    # 공공데이터 API 사용 시
+    if DATA_GO_KR_API_KEY:
+        # TODO: 실제 API 연동
+        # url = "https://api.odcloud.kr/api/nbbacpsa/v1/상가업소"
+        # params = {"serviceKey": DATA_GO_KR_API_KEY, "sigunCd": region_data["sigunCd"]}
+        pass
+    
+    # 가상 데이터 (Fallback)
+    import random
+    
     total_count = random.randint(80, 500)
     opened = random.randint(10, 50)
     closed = random.randint(8, 45)
@@ -581,23 +1137,29 @@ def get_business_data(region_data, industry_keyword):
         "by_type": {
             "한식": random.randint(30, 60),
             "중식": random.randint(10, 30),
-            "일식": random.randint(8, 25),
-            "치킨": random.randint(15, 40)
+            "일식": random.randint(8, 25)
         } if industry_keyword == "음식점" else {}
     }
 
 def get_sales_data(region_data, industry_keyword):
-    """매출 데이터 조회 (가상)"""
+    """
+    매출 데이터 조회
+    공공데이터 API 연동 준비
+    """
     
+    # 공공데이터 API 사용 시
+    if DATA_GO_KR_API_KEY:
+        # TODO: 실제 API 연동
+        # url = "https://api.odcloud.kr/api/15083033/v1/상권정보"
+        # params = {"serviceKey": DATA_GO_KR_API_KEY, "sigunCd": region_data["sigunCd"]}
+        pass
+    
+    # 가상 데이터 (Fallback)
     import random
     
-    # 업종별 기본 매출 (만원)
     base_sales = {
-        "음식점": 2200,
-        "한식": 2350,
-        "카페": 1920,
-        "병원": 4800,
-        "학원": 3200
+        "음식점": 2200, "한식": 2350, "카페": 1920,
+        "병원": 4800, "학원": 3200
     }
     
     monthly_sales = base_sales.get(industry_keyword, 2000) * 10000
@@ -612,30 +1174,33 @@ def get_sales_data(region_data, industry_keyword):
         "yoy_growth": round(random.uniform(3.0, 15.0), 1),
         "time_dist": {
             "lunch": random.randint(30, 42),
-            "dinner": random.randint(35, 48),
-            "other": 25
+            "dinner": random.randint(35, 48)
         },
         "weekday_ratio": random.randint(58, 72)
     }
 
-def format_sales_analysis(region_name, industry_keyword):
+def format_sales_analysis(region_keyword, industry_keyword):
     """매출 분석 포맷팅"""
     
-    if region_name not in REGION_DATA:
-        return f"[매출분석] 오류\n\n'{region_name}' 지역을 찾을 수 없습니다."
+    # Kakao API로 지역 검색
+    region_data = search_kakao_region(region_keyword)
+    
+    if not region_data["success"]:
+        return f"[매출분석] 오류\n\n'{region_keyword}' 지역을 찾을 수 없습니다."
     
     if industry_keyword not in INDUSTRY_CODES:
-        available = ", ".join(list(INDUSTRY_CODES.keys())[:15])
-        return f"[매출분석] 오류\n\n'{industry_keyword}' 업종을 찾을 수 없습니다.\n\n사용 가능:\n{available}"
+        available = ", ".join(list(INDUSTRY_CODES.keys())[:10])
+        return f"[매출분석] 오류\n\n'{industry_keyword}' 업종 없음\n\n예) {available}"
     
-    region_data = REGION_DATA[region_name]
     business_data = get_business_data(region_data, industry_keyword)
     sales_data = get_sales_data(region_data, industry_keyword)
     
-    lines = [f"[매출분석] {region_name} {industry_keyword}", ""]
+    dong_name = region_data.get("dongNm", region_keyword)
+    
+    lines = [f"[매출분석] {dong_name} {industry_keyword}", ""]
     
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("💰 평균 매출 현황")
+    lines.append("💰 평균 매출")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
@@ -651,7 +1216,7 @@ def format_sales_analysis(region_name, industry_keyword):
     
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"🏪 업소 현황 ({region_name})")
+    lines.append(f"🏪 업소 현황")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
@@ -660,14 +1225,13 @@ def format_sales_analysis(region_name, industry_keyword):
     
     if business_data["by_type"]:
         lines.append("")
-        lines.append("세부 업종:")
         for name, count in business_data["by_type"].items():
             ratio = (count / total) * 100
             lines.append(f"├─ {name}: {count}개 ({ratio:.1f}%)")
     
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("📊 개폐업 현황 (최근 1년)")
+    lines.append("📊 개폐업 (최근 1년)")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
@@ -676,17 +1240,14 @@ def format_sales_analysis(region_name, industry_keyword):
     net = opened - closed
     closure_rate = business_data["closure_rate"]
     
-    lines.append(f"신규 개업: {opened}개")
+    lines.append(f"신규: {opened}개")
     lines.append(f"폐업: {closed}개")
     sign = "+" if net >= 0 else ""
-    lines.append(f"순증감: {sign}{net}개 ({sign}{(net/total)*100:.1f}%)")
-    lines.append("")
+    lines.append(f"순증: {sign}{net}개")
     lines.append(f"폐업률: {closure_rate}%")
     
     if closure_rate >= 15:
-        lines.append("⚠️⚠️ 높은 폐업률 주의")
-    elif closure_rate >= 10:
-        lines.append("⚠️ 경쟁 치열")
+        lines.append("⚠️⚠️ 높은 폐업률")
     
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
@@ -695,49 +1256,31 @@ def format_sales_analysis(region_name, industry_keyword):
     lines.append("")
     
     time_dist = sales_data["time_dist"]
-    lines.append(f"점심 (11-14시): {time_dist['lunch']}% 🔥")
-    lines.append(f"저녁 (17-22시): {time_dist['dinner']}% 🔥")
-    lines.append(f"기타: {time_dist['other']}%")
+    lines.append(f"점심: {time_dist['lunch']}% 🔥")
+    lines.append(f"저녁: {time_dist['dinner']}% 🔥")
     
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("📅 요일별 매출")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    weekday = sales_data["weekday_ratio"]
-    weekend = 100 - weekday
-    lines.append(f"평일: {weekday}%")
-    lines.append(f"주말: {weekend}%")
-    
-    lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("💡 매출 인사이트")
+    lines.append("💡 인사이트")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
     if growth >= 10:
-        lines.append(f"✅ 높은 성장세 (+{growth}%)")
-    else:
-        lines.append(f"➡️ 안정적 성장 (+{growth}%)")
+        lines.append(f"✅ 높은 성장 (+{growth}%)")
     
     if closure_rate >= 15:
-        lines.append("⚠️ 높은 폐업률 주의")
-        lines.append("→ 차별화 전략 필수")
+        lines.append("⚠️ 차별화 필수")
     elif closure_rate <= 8:
-        lines.append("✅ 낮은 폐업률 (안정적)")
+        lines.append("✅ 안정적")
     
     lines.append("")
     lines.append("📌 성공 전략")
+    lines.append(f"• 객단가 {avg_price:,}원 유지")
     
     if time_dist['lunch'] >= 35:
-        lines.append("• 점심 시간대 집중 마케팅")
+        lines.append("• 점심 마케팅 집중")
     if time_dist['dinner'] >= 40:
-        lines.append("• 저녁 웨이팅 관리 필수")
-    if weekday >= 65:
-        lines.append("• 주말 배달 강화 필요")
-    
-    lines.append(f"• 객단가 {avg_price:,}원 이상 유지")
+        lines.append("• 저녁 웨이팅 관리")
     
     return "\n".join(lines)
 
@@ -748,73 +1291,53 @@ def get_help():
     return """[사용 가이드]
 
 ━━━━━━━━━━━━━━━━━━━━━
-📊 1. 검색량 전년 비교
+📊 기본 기능
 ━━━━━━━━━━━━━━━━━━━━━
 
-명령어: 비교 [키워드]
+▶ 키워드 검색량 (최대 5개)
+예) 부평맛집,강남맛집,송도카페
 
-예시:
-• 비교 부평맛집
-• 비교 강남카페
-• 비교 송도치킨
+▶ 연관 검색어
+예) 연관 부평맛집
 
-기능:
-- 전년 동월 검색량 비교
-- 월별 트렌드 그래프
-- 성장률 분석
+▶ 자동완성어 (네이버)
+예) 자동 부평맛집
 
-━━━━━━━━━━━━━━━━━━━━━
-🗺️ 2. 지역 유동인구 분석
-━━━━━━━━━━━━━━━━━━━━━
+▶ 자동완성어 (유튜브)
+예) 유튜브 부평맛집
 
-명령어: 지역 [동이름]
+▶ 광고 단가 분석
+예) 광고 부평맛집
 
-예시:
-• 지역 부평동
-• 지역 역삼동
-• 지역 홍대
-
-기능:
-- 일평균 유동인구
-- 연령/성별 분포
-- 시간대별 유동량
-- 입지 특성 분석
+▶ 대표 키워드
+예) 대표 1234567890
 
 ━━━━━━━━━━━━━━━━━━━━━
-💰 3. 업종별 매출 분석
+🆕 상권 분석 (전국 지원)
 ━━━━━━━━━━━━━━━━━━━━━
 
-명령어: 매출 [동이름] [업종]
+▶ 검색량 전년 비교
+예) 비교 부평맛집
 
-예시:
-• 매출 부평동 음식점
-• 매출 부평동 카페
-• 매출 역삼동 병원
-• 매출 홍대 학원
+▶ 지역 유동인구
+예) 지역 홍대
+예) 지역 부평동
+예) 지역 강남역
 
-기능:
-- 평균 매출/객단가
-- 업소 개폐업 현황
-- 시간대별 매출 분포
-- 성공 전략 제시
+▶ 업종별 매출
+예) 매출 홍대 음식점
+예) 매출 역삼동 카페
 
 ━━━━━━━━━━━━━━━━━━━━━
-📍 지원 지역
+🎲 재미 기능
 ━━━━━━━━━━━━━━━━━━━━━
 
-인천: 부평동, 부개동, 계산동, 송도동
-서울: 역삼동, 논현동, 홍대, 서초동, 잠실동
-부산: 우동, 서면
-경기: 분당동, 백석동, 인계동
+▶ 운세
+예) 운세
+예) 운세 870114
 
-━━━━━━━━━━━━━━━━━━━━━
-🏪 지원 업종
-━━━━━━━━━━━━━━━━━━━━━
-
-음식: 음식점, 한식, 중식, 일식, 치킨, 카페
-의료: 병원, 치과, 한의원
-교육: 학원, 입시학원, 외국어학원
-기타: 편의점, 미용실, 부동산
+▶ 로또
+예) 로또
 
 ━━━━━━━━━━━━━━━━━━━━━"""
 
@@ -826,19 +1349,33 @@ def kakao_skill():
     try:
         request_data = request.get_json()
         if request_data is None:
-            return create_kakao_response("요청 데이터를 받지 못했습니다.")
+            return create_kakao_response("요청 데이터 오류")
         
         user_utterance = request_data.get("userRequest", {}).get("utterance", "").strip()
         if not user_utterance:
-            return create_kakao_response("명령어를 입력해주세요!\n\n도움말을 보려면 '도움말' 입력")
+            return create_kakao_response("명령어를 입력해주세요!\n\n'도움말' 입력")
         
         lower_input = user_utterance.lower()
         
         # 도움말
-        if lower_input in ["도움말", "도움", "사용법", "help", "?", "메뉴"]:
+        if lower_input in ["도움말", "도움", "사용법", "help", "?"]:
             return create_kakao_response(get_help())
         
-        # 1. 비교 [키워드]
+        # 운세
+        if lower_input.startswith("운세 "):
+            birthdate = ''.join(filter(str.isdigit, user_utterance))
+            if birthdate and len(birthdate) in [6, 8]:
+                return create_kakao_response(get_fortune(birthdate))
+            return create_kakao_response("예) 운세 870114")
+        
+        if lower_input in ["운세", "오늘운세"]:
+            return create_kakao_response(get_fortune())
+        
+        # 로또
+        if lower_input in ["로또", "로또번호"]:
+            return create_kakao_response(get_lotto())
+        
+        # 비교
         if lower_input.startswith("비교 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
@@ -846,14 +1383,14 @@ def kakao_skill():
                 return create_kakao_response(format_comparison_analysis(analysis))
             return create_kakao_response("예) 비교 부평맛집")
         
-        # 2. 지역 [동]
+        # 지역
         if lower_input.startswith("지역 "):
             region = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if region:
                 return create_kakao_response(format_region_analysis(region))
             return create_kakao_response("예) 지역 부평동")
         
-        # 3. 매출 [동] [업종]
+        # 매출
         if lower_input.startswith("매출 "):
             parts = user_utterance.split(" ")
             if len(parts) >= 3:
@@ -862,12 +1399,53 @@ def kakao_skill():
                 return create_kakao_response(format_sales_analysis(region, industry))
             return create_kakao_response("예) 매출 부평동 음식점")
         
-        # 기본 응답
-        return create_kakao_response("명령어를 확인해주세요.\n\n도움말: '도움말' 입력")
+        # 유튜브
+        if lower_input.startswith("유튜브 "):
+            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            if keyword:
+                return create_kakao_response(get_youtube_autocomplete(keyword))
+            return create_kakao_response("예) 유튜브 부평맛집")
+        
+        # 자동완성
+        if lower_input.startswith("자동 "):
+            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            if keyword:
+                return create_kakao_response(get_autocomplete(keyword))
+            return create_kakao_response("예) 자동 부평맛집")
+        
+        # 대표키워드
+        if lower_input.startswith("대표 "):
+            input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            if input_text:
+                return create_kakao_response(format_place_keywords(input_text))
+            return create_kakao_response("예) 대표 1234567890")
+        
+        # 연관
+        if lower_input.startswith("연관 "):
+            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            keyword = clean_keyword(keyword)
+            if keyword:
+                return create_kakao_response(get_related_keywords(keyword))
+            return create_kakao_response("예) 연관 부평맛집")
+        
+        # 광고
+        if lower_input.startswith("광고 "):
+            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            keyword = clean_keyword(keyword)
+            if keyword:
+                return create_kakao_response(get_ad_cost(keyword))
+            return create_kakao_response("예) 광고 부평맛집")
+        
+        # 기본: 검색량
+        keyword = user_utterance.strip()
+        if "," in keyword:
+            return create_kakao_response(get_search_volume(keyword))
+        else:
+            return create_kakao_response(get_search_volume(clean_keyword(keyword)))
         
     except Exception as e:
         logger.error(f"스킬 오류: {str(e)}")
-        return create_kakao_response(f"오류가 발생했습니다.\n잠시 후 다시 시도해주세요.")
+        return create_kakao_response(f"오류 발생\n잠시 후 다시 시도해주세요.")
 
 def create_kakao_response(text):
     if len(text) > 1000:
@@ -884,7 +1462,7 @@ def create_kakao_response(text):
 #############################################
 @app.route('/')
 def home():
-    return "상권분석 API 서버 정상 작동 중"
+    return "서버 정상 작동 중"
 
 @app.route('/test/compare')
 def test_compare():
@@ -895,29 +1473,29 @@ def test_compare():
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>비교 테스트</title></head>
 <body>
-<h2>키워드: {keyword}</h2>
-<h3>글자 수: {len(result)}자</h3>
+<h2>{keyword}</h2>
+<h3>글자: {len(result)}자</h3>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
 </body></html>"""
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 @app.route('/test/region')
 def test_region():
-    region = request.args.get('r', '부평동')
+    region = request.args.get('r', '홍대')
     result = format_region_analysis(region)
     
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>지역 테스트</title></head>
 <body>
-<h2>지역: {region}</h2>
-<h3>글자 수: {len(result)}자</h3>
+<h2>{region}</h2>
+<h3>글자: {len(result)}자</h3>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
 </body></html>"""
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 @app.route('/test/sales')
 def test_sales():
-    region = request.args.get('r', '부평동')
+    region = request.args.get('r', '홍대')
     industry = request.args.get('i', '음식점')
     result = format_sales_analysis(region, industry)
     
@@ -925,8 +1503,21 @@ def test_sales():
 <html><head><meta charset="UTF-8"><title>매출 테스트</title></head>
 <body>
 <h2>{region} {industry}</h2>
-<h3>글자 수: {len(result)}자</h3>
+<h3>글자: {len(result)}자</h3>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
+</body></html>"""
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+@app.route('/test/kakao')
+def test_kakao():
+    region = request.args.get('r', '홍대')
+    result = search_kakao_region(region)
+    
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Kakao API 테스트</title></head>
+<body>
+<h2>Kakao 지역 검색: {region}</h2>
+<pre style="background:#f5f5f5; padding:20px;">{json.dumps(result, indent=2, ensure_ascii=False)}</pre>
 </body></html>"""
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
@@ -937,12 +1528,14 @@ if __name__ == '__main__':
     print("=== 환경변수 확인 ===")
     print(f"검색광고 API: {'✅' if NAVER_API_KEY else '❌'}")
     print(f"DataLab API: {'✅' if NAVER_CLIENT_ID else '❌'}")
+    print(f"Kakao API: {'✅' if KAKAO_REST_API_KEY else '❌'}")
+    print(f"Gemini API: {'✅' if GEMINI_API_KEY else '❌'}")
     print(f"공공데이터 API: {'✅' if DATA_GO_KR_API_KEY else '❌'}")
     
     if validate_required_keys():
-        print("✅ 필수 API 키 확인 완료")
+        print("✅ 필수 키 확인 완료")
     else:
-        print("⚠️ 일부 기능이 제한될 수 있습니다")
+        print("⚠️ 일부 기능 제한")
     
     print("====================")
     
