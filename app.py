@@ -299,93 +299,10 @@ def get_related_keywords_api(keyword):
     return response.strip()
 
 #############################################
-# 기본 기능: 광고 단가 (데이터 수집용)
+# 기본 기능: 광고 단가 (텍스트만)
 #############################################
-def get_ad_cost_data(keyword):
-    """광고 단가 데이터 수집 (그래프용)"""
-    result = get_keyword_data(keyword)
-    if not result["success"]:
-        return None
-    
-    kw = result["data"][0]
-    keyword_name = kw.get('relKeyword', keyword)
-    pc_qc = parse_count(kw.get("monthlyPcQcCnt"))
-    mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
-    total_qc = pc_qc + mobile_qc
-    mobile_ratio = (mobile_qc * 100 // total_qc) if total_qc > 0 else 0
-    comp_idx = kw.get("compIdx", "중간")
-    
-    test_bids = [
-        100, 200, 300, 400, 500, 600, 700, 800, 900, 1000,
-        1200, 1500, 1800, 2000, 2200, 2500, 3000, 3500, 4000, 5000,
-        6000, 7000, 8000, 10000, 15000
-    ]
-    
-    mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
-    
-    if not mobile_perf.get("success"):
-        return None
-    
-    mobile_estimates = mobile_perf["data"].get("estimate", [])
-    valid_estimates = [e for e in mobile_estimates if e.get('clicks', 0) > 0]
-    
-    if not valid_estimates:
-        return None
-    
-    max_clicks = max(e.get('clicks', 0) for e in valid_estimates)
-    
-    # 대표 입찰가 5개 선택
-    target_ratios = [0.2, 0.4, 0.6, 0.8, 1.0]
-    selected_bids = []
-    
-    for ratio in target_ratios:
-        target_clicks = int(max_clicks * ratio)
-        closest = min(valid_estimates, key=lambda x: abs(x.get('clicks', 0) - target_clicks))
-        selected_bids.append(closest)
-    
-    seen_bids = set()
-    unique_selected = []
-    for e in selected_bids:
-        bid = e.get('bid', 0)
-        if bid not in seen_bids:
-            seen_bids.add(bid)
-            unique_selected.append(e)
-    
-    unique_selected.sort(key=lambda x: x.get('bid', 0))
-    
-    # 추천 입찰가
-    efficient_est = None
-    if len(unique_selected) >= 5:
-        efficient_est = unique_selected[4]
-    elif len(unique_selected) >= 3:
-        efficient_est = unique_selected[-1]
-    elif len(unique_selected) > 0:
-        efficient_est = unique_selected[0]
-    
-    efficient_bid = 0
-    efficient_clicks = 0
-    efficient_cost = 0
-    
-    if efficient_est:
-        efficient_bid = efficient_est.get('bid', 0)
-        efficient_clicks = efficient_est.get('clicks', 0)
-        efficient_cost = efficient_est.get('cost', 0)
-        if efficient_cost == 0:
-            efficient_cost = int(efficient_clicks * efficient_bid * 0.8)
-    
-    return {
-        "keyword": keyword_name,
-        "total_qc": total_qc,
-        "mobile_ratio": mobile_ratio,
-        "comp_idx": comp_idx,
-        "estimates": unique_selected,
-        "efficient_bid": efficient_bid,
-        "efficient_clicks": efficient_clicks,
-        "efficient_cost": efficient_cost
-    }
-
 def get_ad_cost(keyword):
-    """광고 단가 텍스트 출력 (기존 유지)"""
+    """광고 단가 분석 - 텍스트만"""
     result = get_keyword_data(keyword)
     if not result["success"]:
         return f"조회 실패: {result['error']}"
@@ -1030,11 +947,11 @@ def create_fallback_comparison(keyword, current_volume, mobile_ratio):
     }
 
 #############################################
-# QuickChart.io 차트 생성 함수들
+# QuickChart 차트 생성
 #############################################
 
 def create_comparison_chart_url(analysis):
-    """비교 분석 막대 그래프 URL 생성"""
+    """비교 분석 막대 그래프"""
     
     try:
         keyword = analysis["keyword"]
@@ -1114,104 +1031,13 @@ def create_comparison_chart_url(analysis):
         logger.error(f"❌ 비교 차트 생성 오류: {str(e)}")
         return None
 
-def create_ad_chart_url(ad_data):
-    """광고 단가 막대 그래프 URL 생성"""
-    
-    try:
-        keyword = ad_data["keyword"]
-        estimates = ad_data["estimates"]
-        
-        if not estimates:
-            return None
-        
-        labels = []
-        clicks = []
-        colors = []
-        
-        efficient_bid = ad_data["efficient_bid"]
-        
-        for est in estimates:
-            bid = est.get('bid', 0)
-            click = est.get('clicks', 0)
-            
-            labels.append(f"{format_number(bid)}원")
-            clicks.append(click)
-            
-            # 추천 입찰가는 다른 색상
-            if bid == efficient_bid:
-                colors.append("rgba(52, 168, 83, 0.7)")  # 초록색
-            else:
-                colors.append("rgba(66, 133, 244, 0.7)")  # 파란색
-        
-        chart_config = {
-            "type": "bar",
-            "data": {
-                "labels": labels,
-                "datasets": [{
-                    "label": "예상 클릭수 (월)",
-                    "data": clicks,
-                    "backgroundColor": colors,
-                    "borderColor": "rgba(66, 133, 244, 1)",
-                    "borderWidth": 2
-                }]
-            },
-            "options": {
-                "title": {
-                    "display": True,
-                    "text": f"{keyword} 입찰가별 성과",
-                    "fontSize": 20,
-                    "fontColor": "#333",
-                    "padding": 20
-                },
-                "legend": {
-                    "display": False
-                },
-                "scales": {
-                    "yAxes": [{
-                        "ticks": {
-                            "beginAtZero": True,
-                            "fontSize": 14
-                        },
-                        "scaleLabel": {
-                            "display": True,
-                            "labelString": "클릭수 (회/월)",
-                            "fontSize": 14
-                        }
-                    }],
-                    "xAxes": [{
-                        "ticks": {
-                            "fontSize": 12
-                        },
-                        "scaleLabel": {
-                            "display": True,
-                            "labelString": "입찰가",
-                            "fontSize": 14
-                        }
-                    }]
-                }
-            }
-        }
-        
-        chart_json = json.dumps(chart_config)
-        encoded = urllib.parse.quote(chart_json)
-        
-        url = f"https://quickchart.io/chart?c={encoded}&width=800&height=450&backgroundColor=white"
-        
-        logger.info(f"✅ 광고 차트 URL 생성: {len(url)}자")
-        
-        return url
-        
-    except Exception as e:
-        logger.error(f"❌ 광고 차트 생성 오류: {str(e)}")
-        return None
-
 def create_region_charts_url(region_data):
-    """지역 분석 차트 URL 생성 (연령대 파이 + 시간대 막대)"""
+    """지역 분석 차트 (파이 + 막대)"""
     
     try:
         pop_data = get_population_data(region_data)
         
-        # 1. 연령대 파이 차트
+        # 연령대 파이 차트
         age_data = pop_data["by_age"]
         age_labels = []
         age_values = []
@@ -1255,7 +1081,7 @@ def create_region_charts_url(region_data):
         pie_encoded = urllib.parse.quote(pie_json)
         pie_url = f"https://quickchart.io/chart?c={pie_encoded}&width=500&height=350&backgroundColor=white"
         
-        # 2. 시간대별 막대 차트
+        # 시간대별 막대 차트
         time_data = pop_data["by_time"]
         time_labels = ["07-09시", "12-13시", "18-19시", "20-22시"]
         time_values = [
@@ -1319,218 +1145,11 @@ def create_region_charts_url(region_data):
         return None
 
 #############################################
-# 카카오 차트 응답 함수들
-#############################################
-
-def create_kakao_comparison_response(keyword, analysis):
-    """비교 분석 - 막대그래프 + 텍스트"""
-    
-    if not analysis:
-        return create_kakao_response("[검색량 비교] 조회 실패\n\n검색광고 API 오류")
-    
-    chart_url = create_comparison_chart_url(analysis)
-    
-    if not chart_url:
-        return create_kakao_response(format_comparison_text(analysis))
-    
-    vol_2025 = analysis["volume_2025"]
-    vol_2024 = analysis.get("volume_2024")
-    change_rate = analysis["change_rate"]
-    mobile_ratio = analysis["mobile_ratio"]
-    
-    emoji = "📈" if change_rate > 0 else "📉" if change_rate < 0 else "➡️"
-    sign = "+" if change_rate > 0 else ""
-    
-    summary = f"""[검색량 비교] {keyword}
-
-━━━━━━━━━━━━━━━━━━━━━
-📊 월간 검색량
-━━━━━━━━━━━━━━━━━━━━━
-
-2024년: {format_number(vol_2024)}회
-2025년: {format_number(vol_2025)}회
-
-전년비: {sign}{change_rate:.1f}% {emoji}
-
-━━━━━━━━━━━━━━━━━━━━━
-💡 인사이트
-━━━━━━━━━━━━━━━━━━━━━
-"""
-    
-    if change_rate >= 20:
-        summary += f"\n✅ 급성장 중 ({sign}{change_rate:.1f}%)"
-        summary += "\n→ 검색 광고 적극 추천"
-    elif change_rate >= 10:
-        summary += f"\n✅ 지속 성장 (+{change_rate:.1f}%)"
-        summary += "\n→ 광고 시작 적기"
-    elif change_rate >= -10:
-        summary += f"\n➡️ 안정 유지 ({sign}{change_rate:.1f}%)"
-        summary += "\n→ 꾸준한 마케팅"
-    else:
-        summary += f"\n⚠️ 검색 감소 ({change_rate:.1f}%)"
-        summary += "\n→ SNS 바이럴 필요"
-    
-    summary += f"\n✅ 모바일 {mobile_ratio:.0f}% - 최적화 필수"
-    
-    return jsonify({
-        "version": "2.0",
-        "template": {
-            "outputs": [
-                {
-                    "simpleImage": {
-                        "imageUrl": chart_url,
-                        "altText": f"{keyword} 검색량 비교 그래프"
-                    }
-                },
-                {
-                    "simpleText": {
-                        "text": summary
-                    }
-                }
-            ]
-        }
-    })
-
-def create_kakao_ad_response(keyword, ad_data):
-    """광고 단가 - 막대그래프 + 텍스트"""
-    
-    if not ad_data:
-        return create_kakao_response(get_ad_cost(keyword))
-    
-    chart_url = create_ad_chart_url(ad_data)
-    
-    if not chart_url:
-        return create_kakao_response(get_ad_cost(keyword))
-    
-    efficient_bid = ad_data["efficient_bid"]
-    efficient_clicks = ad_data["efficient_clicks"]
-    efficient_cost = ad_data["efficient_cost"]
-    comp_idx = ad_data["comp_idx"]
-    
-    comp_emoji = "🔴" if comp_idx == "높음" else "🟡" if comp_idx == "중간" else "🟢"
-    
-    cpc = int(efficient_cost / efficient_clicks) if efficient_clicks > 0 else 0
-    daily_budget = max(efficient_cost / 30, 10000)
-    
-    summary = f"""💰 {keyword} 광고 분석
-
-━━━━━━━━━━━━━━━━━━━━━
-📊 키워드 정보
-━━━━━━━━━━━━━━━━━━━━━
-
-경쟁도: {comp_idx} {comp_emoji}
-월간 검색량: {format_number(ad_data['total_qc'])}회
-
-━━━━━━━━━━━━━━━━━━━━━
-🎯 추천 입찰가
-━━━━━━━━━━━━━━━━━━━━━
-
-✅ 추천: {format_number(efficient_bid)}원
-├ 예상 클릭: 월 {efficient_clicks}회
-├ 예상 비용: 월 {format_won(efficient_cost)}
-├ 클릭당 비용: 약 {format_number(cpc)}원
-└ 일 예산: 약 {format_won(daily_budget)}
-
-━━━━━━━━━━━━━━━━━━━━━
-📋 운영 가이드
-━━━━━━━━━━━━━━━━━━━━━
-
-• 1주일 후 CTR 확인 (1.5% 목표)
-• 전환 발생 시 예산 증액 검토
-• 품질점수 관리로 CPC 절감"""
-    
-    return jsonify({
-        "version": "2.0",
-        "template": {
-            "outputs": [
-                {
-                    "simpleImage": {
-                        "imageUrl": chart_url,
-                        "altText": f"{keyword} 입찰가별 성과 그래프"
-                    }
-                },
-                {
-                    "simpleText": {
-                        "text": summary
-                    }
-                }
-            ]
-        }
-    })
-
-def create_kakao_region_response(region_keyword, region_data):
-    """지역 분석 - 차트 2개 + 텍스트"""
-    
-    if not region_data["success"]:
-        return create_kakao_response(format_region_text(region_keyword))
-    
-    charts = create_region_charts_url(region_data)
-    
-    if not charts:
-        return create_kakao_response(format_region_text(region_keyword))
-    
-    pop_data = get_population_data(region_data)
-    daily_avg = pop_data["daily_avg"]
-    
-    # 주 타겟 연령대
-    age_data = pop_data["by_age"]
-    main_age = max(age_data, key=age_data.get)
-    main_age_ratio = age_data[main_age]
-    
-    # 피크 시간
-    time_data = pop_data["by_time"]
-    peak_time = "18-19시" if time_data["1819"] == max(time_data.values()) else "12-13시"
-    
-    summary = f"""[지역분석] {region_data['fullName']}
-
-━━━━━━━━━━━━━━━━━━━━━
-👥 유동인구
-━━━━━━━━━━━━━━━━━━━━━
-
-일평균: {format_number(daily_avg)}명
-
-주 타겟: {main_age.replace('s', '대')} ({main_age_ratio}%) ⭐
-피크 시간: {peak_time} 🔥
-
-━━━━━━━━━━━━━━━━━━━━━
-💡 입지 인사이트
-━━━━━━━━━━━━━━━━━━━━━
-
-✅ {main_age.replace('s', '대')} 중심 상권
-✅ {peak_time} 집중 마케팅
-✅ 모바일 최적화 필수"""
-    
-    return jsonify({
-        "version": "2.0",
-        "template": {
-            "outputs": [
-                {
-                    "simpleImage": {
-                        "imageUrl": charts["pie_chart"],
-                        "altText": "연령대 비율"
-                    }
-                },
-                {
-                    "simpleImage": {
-                        "imageUrl": charts["bar_chart"],
-                        "altText": "시간대별 유동인구"
-                    }
-                },
-                {
-                    "simpleText": {
-                        "text": summary
-                    }
-                }
-            ]
-        }
-    })
-
-#############################################
-# 텍스트 전용 포맷 함수들 (폴백용)
+# 텍스트 포맷 함수들
 #############################################
 
 def format_comparison_text(analysis):
-    """비교 분석 텍스트 (차트 실패 시)"""
+    """비교 분석 전체 텍스트"""
     
     if not analysis:
         return "[검색량 비교] 조회 실패"
@@ -1578,6 +1197,41 @@ def format_comparison_text(analysis):
         lines.append(f"전년 대비: {sign}{format_number(diff)}회 ({sign}{change_rate:.1f}%) {emoji}")
     
     lines.append("")
+    
+    if analysis.get("datalab_available") and analysis["monthly_2025"]:
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("📉 월별 추이 (최근 6개월)")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
+        
+        lines.append("2024년")
+        for item in analysis["monthly_2024"]:
+            period = item["period"]
+            ratio = item["ratio"]
+            
+            month = period.split("-")[1]
+            value = int(ratio * 100)
+            bar_length = int(ratio / 10)
+            bar = "█" * bar_length
+            
+            lines.append(f"├─ {month}월: {value:>6,} {bar}")
+        
+        lines.append("")
+        
+        lines.append("2025년")
+        for item in analysis["monthly_2025"]:
+            period = item["period"]
+            ratio = item["ratio"]
+            
+            month = period.split("-")[1]
+            value = int(ratio * 100)
+            bar_length = int(ratio / 10)
+            bar = "█" * bar_length
+            
+            lines.append(f"├─ {month}월: {value:>6,} {bar}")
+        
+        lines.append("")
+    
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("💡 인사이트")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
@@ -1602,13 +1256,8 @@ def format_comparison_text(analysis):
     
     return "\n".join(lines)
 
-def format_region_text(region_keyword):
-    """지역 분석 텍스트 (차트 실패 시)"""
-    
-    region_data = search_kakao_region(region_keyword)
-    
-    if not region_data["success"]:
-        return f"[지역분석] 오류\n\n'{region_keyword}' 지역을 찾을 수 없습니다."
+def format_region_full_text(region_data):
+    """지역 분석 전체 텍스트"""
     
     pop_data = get_population_data(region_data)
     
@@ -1631,6 +1280,12 @@ def format_region_text(region_keyword):
         lines.append(f"├─ {age.replace('s', '대')}: {ratio}% ({format_number(count)}명){star}")
     
     lines.append("")
+    lines.append("성별:")
+    gender = pop_data["by_gender"]
+    lines.append(f"├─ 여성: {gender['female']}%")
+    lines.append(f"└─ 남성: {gender['male']}%")
+    
+    lines.append("")
     lines.append("시간대별:")
     time_data = pop_data["by_time"]
     lines.append(f"├─ 07-09시: {format_number(time_data['0709'])}명")
@@ -1638,7 +1293,146 @@ def format_region_text(region_keyword):
     lines.append(f"├─ 18-19시: {format_number(time_data['1819'])}명 🔥")
     lines.append(f"└─ 20-22시: {format_number(time_data['2022'])}명")
     
+    lines.append("")
+    lines.append("평일/주말:")
+    weekday = pop_data["weekday_vs_weekend"]
+    diff = int((weekday['weekend'] - weekday['weekday']) / weekday['weekday'] * 100)
+    lines.append(f"├─ 평일: {format_number(weekday['weekday'])}명")
+    lines.append(f"└─ 주말: {format_number(weekday['weekend'])}명 ({diff:+d}%)")
+    
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("📍 입지 특성")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("")
+    
+    dong_name = region_data.get("dongNm", "")
+    
+    if "역삼" in dong_name or "강남" in dong_name:
+        facilities = ["오피스 밀집", "대기업 본사"]
+        strength = ["고소득층", "직장인 밀집"]
+        weakness = ["높은 임대료", "치열한 경쟁"]
+    elif "홍대" in dong_name or "동교" in dong_name:
+        facilities = ["대학가", "클럽/공연장"]
+        strength = ["젊은층", "유동인구 많음"]
+        weakness = ["주말 집중", "소음"]
+    elif "부평" in dong_name or "삼산" in dong_name:
+        facilities = ["역세권", "주거 복합"]
+        strength = ["안정적 수요", "평일 강세"]
+        weakness = ["주말 약세", "주차 부족"]
+    else:
+        facilities = ["데이터 수집 중"]
+        strength = ["분석 중"]
+        weakness = ["분석 중"]
+    
+    lines.append("주요 시설:")
+    for fac in facilities:
+        lines.append(f"• {fac}")
+    
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("💡 입지 인사이트")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("")
+    
+    lines.append("✅ 강점")
+    for s in strength:
+        lines.append(f"• {s}")
+    
+    lines.append("")
+    lines.append("⚠️ 약점")
+    for w in weakness:
+        lines.append(f"• {w}")
+    
+    lines.append("")
+    lines.append("🎯 업종 적합도")
+    lines.append("음식점: ⭐⭐⭐⭐⭐")
+    lines.append("카페: ⭐⭐⭐⭐")
+    lines.append("소매: ⭐⭐⭐")
+    
     return "\n".join(lines)
+
+#############################################
+# 카카오 응답 함수들
+#############################################
+
+def create_kakao_comparison_response(keyword, analysis):
+    """비교 - 막대그래프 + 전체 텍스트"""
+    
+    if not analysis:
+        return create_kakao_response("[검색량 비교] 조회 실패")
+    
+    # 차트 URL 생성
+    chart_url = create_comparison_chart_url(analysis)
+    
+    # 전체 텍스트
+    full_text = format_comparison_text(analysis)
+    
+    # 차트 실패 시 텍스트만
+    if not chart_url:
+        return create_kakao_response(full_text)
+    
+    # 차트 + 텍스트
+    return jsonify({
+        "version": "2.0",
+        "template": {
+            "outputs": [
+                {
+                    "simpleImage": {
+                        "imageUrl": chart_url,
+                        "altText": f"{keyword} 검색량 비교 그래프"
+                    }
+                },
+                {
+                    "simpleText": {
+                        "text": full_text
+                    }
+                }
+            ]
+        }
+    })
+
+def create_kakao_region_response(region_keyword, region_data):
+    """지역 - 파이+막대그래프 + 전체 텍스트"""
+    
+    if not region_data["success"]:
+        return create_kakao_response(f"[지역분석] 오류\n\n'{region_keyword}' 지역을 찾을 수 없습니다.")
+    
+    # 차트 URL 생성
+    charts = create_region_charts_url(region_data)
+    
+    # 전체 텍스트
+    full_text = format_region_full_text(region_data)
+    
+    # 차트 실패 시 텍스트만
+    if not charts:
+        return create_kakao_response(full_text)
+    
+    # 차트 2개 + 텍스트
+    return jsonify({
+        "version": "2.0",
+        "template": {
+            "outputs": [
+                {
+                    "simpleImage": {
+                        "imageUrl": charts["pie_chart"],
+                        "altText": "연령대 비율 파이차트"
+                    }
+                },
+                {
+                    "simpleImage": {
+                        "imageUrl": charts["bar_chart"],
+                        "altText": "시간대별 유동인구"
+                    }
+                },
+                {
+                    "simpleText": {
+                        "text": full_text
+                    }
+                }
+            ]
+        }
+    })
 
 #############################################
 # Kakao API
@@ -1758,7 +1552,7 @@ def kakao_address_search(region_keyword):
         return {"success": False, "error": str(e)}
 
 #############################################
-# 지역/매출 분석
+# 유동인구/매출 데이터
 #############################################
 def get_population_data(region_data):
     """유동인구 데이터"""
@@ -1979,11 +1773,10 @@ def format_sales_analysis(region_input):
 #############################################
 def get_help():
     return """[사용 가이드]
-
 ━━━━━━━━━━━━━━━━━━━━━
+
 📊 기본 기능
 ━━━━━━━━━━━━━━━━━━━━━
-
 ▶ 키워드 검색량
 예) 부평맛집
 예) 부평맛집,강남맛집
@@ -1991,41 +1784,38 @@ def get_help():
 ▶ 연관 검색어
 예) 연관 부평맛집
 
-▶ 자동완성어
+▶ '네이버' 자동완성어
 예) 자동 부평맛집
+
+▶ '유튜브' 자동완성어
 예) 유튜브 부평맛집
+
+▶ 광고 단가 분석
+예) 광고 부평맛집
 
 ▶ 대표 키워드
 예) 대표 1234567890
-
+예) 대표 플레이스URL
 ━━━━━━━━━━━━━━━━━━━━━
+
 📈 상권 분석 (그래프)
 ━━━━━━━━━━━━━━━━━━━━━
-
-▶ 검색량 비교 (막대)
+▶ 검색량 비교
 예) 비교 부평맛집
 
-▶ 광고 단가 (막대)
-예) 광고 부평맛집
-
-▶ 지역 분석 (파이+막대)
+▶ 지역 분석
 예) 지역 홍대
 예) 지역 부평동
 
-▶ 매출 분석 (텍스트)
+▶ 매출 분석(시+동+업종)
 예) 매출 인천 부평동 음식점
-
 ━━━━━━━━━━━━━━━━━━━━━
+
 🎲 재미 기능
 ━━━━━━━━━━━━━━━━━━━━━
-
-▶ 운세
-예) 운세
-예) 운세 870114
-
-▶ 로또
+▶ 운세 & 로또
+예) 운세 & 운세 870114
 예) 로또
-
 ━━━━━━━━━━━━━━━━━━━━━"""
 
 #############################################
@@ -2059,7 +1849,7 @@ def kakao_skill():
         if lower_input in ["로또", "로또번호"]:
             return create_kakao_response(get_lotto())
         
-        # ✅ 비교 - 막대그래프
+        # ✅ 비교 - 막대그래프 + 전체 텍스트
         if lower_input.startswith("비교 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
@@ -2067,16 +1857,15 @@ def kakao_skill():
                 return create_kakao_comparison_response(keyword, analysis)
             return create_kakao_response("예) 비교 부평맛집")
         
-        # ✅ 광고 - 막대그래프
+        # ✅ 광고 - 텍스트만
         if lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
             if keyword:
-                ad_data = get_ad_cost_data(keyword)
-                return create_kakao_ad_response(keyword, ad_data)
+                return create_kakao_response(get_ad_cost(keyword))
             return create_kakao_response("예) 광고 부평맛집")
         
-        # ✅ 지역 - 파이+막대그래프
+        # ✅ 지역 - 파이+막대그래프 + 전체 텍스트
         if lower_input.startswith("지역 "):
             region = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if region:
@@ -2153,15 +1942,8 @@ def test_chart():
         analysis = get_comparison_analysis(keyword)
         if analysis:
             chart_url = create_comparison_chart_url(analysis)
-            title = "검색량 비교 (막대그래프)"
-        else:
-            return "분석 실패", 500
-    
-    elif chart_type == 'ad':
-        ad_data = get_ad_cost_data(keyword)
-        if ad_data:
-            chart_url = create_ad_chart_url(ad_data)
-            title = "광고 단가 (막대그래프)"
+            text = format_comparison_text(analysis)
+            title = "검색량 비교"
         else:
             return "분석 실패", 500
     
@@ -2169,6 +1951,7 @@ def test_chart():
         region_data = search_kakao_region(keyword)
         if region_data["success"]:
             charts = create_region_charts_url(region_data)
+            text = format_region_full_text(region_data)
             if charts:
                 html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>지역 분석</title></head>
@@ -2178,6 +1961,8 @@ def test_chart():
 <img src="{charts['pie_chart']}" style="width:100%; max-width:500px;">
 <h3>시간대 막대 차트</h3>
 <img src="{charts['bar_chart']}" style="width:100%; max-width:700px;">
+<hr>
+<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{text}</pre>
 </body></html>"""
                 return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
         return "지역 조회 실패", 500
@@ -2188,10 +1973,10 @@ def test_chart():
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>{title}</title></head>
 <body style="font-family:Arial; max-width:900px; margin:50px auto; padding:20px;">
-<h2>📊 {title}</h2>
-<p><strong>키워드:</strong> {keyword}</p>
-<img src="{chart_url}" style="width:100%; border:1px solid #ddd; border-radius:8px;">
-<p><small>URL 길이: {len(chart_url)}자</small></p>
+<h2>📊 {title}: {keyword}</h2>
+<img src="{chart_url}" style="width:100%; border:1px solid #ddd; border-radius:8px; margin-bottom:30px;">
+<hr>
+<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{text}</pre>
 </body></html>"""
     
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
