@@ -11,6 +11,8 @@ import json
 import logging
 from datetime import date, timedelta
 from urllib.parse import quote
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import functools
 
 app = Flask(__name__)
 
@@ -28,11 +30,18 @@ NAVER_CLIENT_SECRET = os.environ.get('NAVER_CLIENT_SECRET', '')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 DATA_GO_KR_API_KEY = os.environ.get('DATA_GO_KR_API_KEY', '')
 
+# 카카오 스킬 타임아웃 대응 설정
+API_TIMEOUT = 2.5  # 개별 API 타임아웃 (초)
+SKILL_TIMEOUT = 4.5  # 전체 스킬 타임아웃 (초)
+API_RETRY = 1  # 재시도 횟수
+
+# 스레드풀 (병렬 처리용)
+executor = ThreadPoolExecutor(max_workers=5)
+
 #############################################
 # 환경변수 검증
 #############################################
 def validate_required_keys():
-    """필수 API 키 검증"""
     required = {
         'NAVER_API_KEY': NAVER_API_KEY,
         'NAVER_SECRET_KEY': NAVER_SECRET_KEY,
@@ -40,9 +49,26 @@ def validate_required_keys():
     }
     missing = [k for k, v in required.items() if not v]
     if missing:
-        logger.warning(f"⚠️ Missing required keys: {', '.join(missing)}")
+        logger.warning(f"⚠️ Missing: {', '.join(missing)}")
         return False
     return True
+
+#############################################
+# 타임아웃 데코레이터
+#############################################
+def with_timeout(timeout_seconds):
+    """함수 실행에 타임아웃 적용"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            future = executor.submit(func, *args, **kwargs)
+            try:
+                return future.result(timeout=timeout_seconds)
+            except FuturesTimeoutError:
+                logger.warning(f"Timeout: {func.__name__}")
+                return None
+        return wrapper
+    return decorator
 
 #############################################
 # 유틸리티 함수
@@ -281,7 +307,7 @@ DEFAULT_REGION_DATA = {
 REGION_KEYWORDS = list(REGION_DATA.keys())
 
 #############################################
-# 네이버 검색광고 API
+# 네이버 검색광고 API (빠른 버전)
 #############################################
 def get_naver_api_headers(method="GET", uri="/keywordstool"):
     timestamp = str(int(time.time() * 1000))
@@ -296,52 +322,35 @@ def get_naver_api_headers(method="GET", uri="/keywordstool"):
         "X-Signature": signature_base64
     }
 
-def get_keyword_data(keyword, retry=2):
-    """키워드 데이터 조회 (재시도 로직 포함)"""
+def get_keyword_data_fast(keyword):
+    """키워드 데이터 조회 (빠른 버전 - 재시도 최소화)"""
     if not validate_required_keys():
-        return {"success": False, "error": "API 키가 설정되지 않았습니다."}
+        return {"success": False, "error": "API 키 미설정"}
 
     base_url = "https://api.searchad.naver.com"
     uri = "/keywordstool"
     params = {"hintKeywords": keyword, "showDetail": "1"}
 
-    for attempt in range(retry + 1):
-        try:
-            headers = get_naver_api_headers("GET", uri)
-            response = requests.get(base_url + uri, headers=headers, params=params, timeout=5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                keyword_list = data.get("keywordList", [])
-                if keyword_list:
-                    return {"success": True, "data": keyword_list}
-                return {"success": False, "error": "검색 결과가 없습니다."}
-            
-            if attempt < retry:
-                logger.debug(f"재시도 {attempt + 1}/{retry}: {keyword}")
-                time.sleep(0.5)
-                continue
-            
-            return {"success": False, "error": f"API 오류 ({response.status_code})"}
-            
-        except requests.Timeout:
-            if attempt < retry:
-                logger.debug(f"타임아웃 재시도 {attempt + 1}/{retry}")
-                time.sleep(0.5)
-                continue
-            return {"success": False, "error": "요청 시간 초과"}
-        except Exception as e:
-            logger.error(f"키워드 조회 오류: {str(e)}")
-            if attempt < retry:
-                time.sleep(0.5)
-                continue
-            return {"success": False, "error": str(e)}
+    try:
+        headers = get_naver_api_headers("GET", uri)
+        response = requests.get(base_url + uri, headers=headers, params=params, timeout=API_TIMEOUT)
+        
+        if response.status_code == 200:
+            data = response.json()
+            keyword_list = data.get("keywordList", [])
+            if keyword_list:
+                return {"success": True, "data": keyword_list}
+            return {"success": False, "error": "검색 결과 없음"}
+        
+        return {"success": False, "error": f"API 오류 ({response.status_code})"}
+        
+    except requests.Timeout:
+        return {"success": False, "error": "타임아웃"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
-#############################################
-# CPC API
-#############################################
-def get_performance_estimate(keyword, bids, device='MOBILE', retry=2):
-    """성과 예측 API (재시도 로직 포함)"""
+def get_performance_estimate_fast(keyword, bids, device='MOBILE'):
+    """성과 예측 API (빠른 버전)"""
     uri = '/estimate/performance/keyword'
     url = f'https://api.searchad.naver.com{uri}'
     payload = {
@@ -351,41 +360,23 @@ def get_performance_estimate(keyword, bids, device='MOBILE', retry=2):
         "bids": bids if isinstance(bids, list) else [bids]
     }
 
-    for attempt in range(retry + 1):
-        try:
-            headers = get_naver_api_headers('POST', uri)
-            response = requests.post(url, headers=headers, json=payload, timeout=10)
-            
-            if response.status_code == 200:
-                return {"success": True, "data": response.json()}
-            
-            if attempt < retry:
-                logger.debug(f"성과 예측 재시도 {attempt + 1}/{retry}")
-                time.sleep(0.5)
-                continue
-            
-            return {"success": False, "error": response.text}
-            
-        except requests.Timeout:
-            if attempt < retry:
-                logger.debug(f"타임아웃 재시도 {attempt + 1}/{retry}")
-                time.sleep(0.5)
-                continue
-            return {"success": False, "error": "요청 시간 초과"}
-        except Exception as e:
-            logger.error(f"성과 예측 오류: {str(e)}")
-            if attempt < retry:
-                time.sleep(0.5)
-                continue
-            return {"success": False, "error": str(e)}
+    try:
+        headers = get_naver_api_headers('POST', uri)
+        response = requests.post(url, headers=headers, json=payload, timeout=API_TIMEOUT)
+        
+        if response.status_code == 200:
+            return {"success": True, "data": response.json()}
+        return {"success": False, "error": response.text}
+        
+    except requests.Timeout:
+        return {"success": False, "error": "타임아웃"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
-#############################################
-# DataLab 트렌드 API
-#############################################
-def get_datalab_trend(keyword, retry=2):
-    """트렌드 데이터 조회 (재시도 로직 포함)"""
+def get_datalab_trend_fast(keyword):
+    """트렌드 데이터 (빠른 버전)"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        return {"success": False, "error": "DataLab API 키 미설정"}
+        return {"success": False, "error": "API 키 미설정"}
 
     url = "https://openapi.naver.com/v1/datalab/search"
     end_date = date.today() - timedelta(days=1)
@@ -403,126 +394,26 @@ def get_datalab_trend(keyword, retry=2):
         "Content-Type": "application/json"
     }
 
-    for attempt in range(retry + 1):
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                results = data.get("results", [])
-                if results and results[0].get("data"):
-                    return {"success": True, "data": results[0]["data"]}
-            
-            if attempt < retry:
-                logger.debug(f"트렌드 재시도 {attempt + 1}/{retry}")
-                time.sleep(0.5)
-                continue
-            
-            return {"success": False, "error": "트렌드 데이터 없음"}
-            
-        except requests.Timeout:
-            if attempt < retry:
-                time.sleep(0.5)
-                continue
-            return {"success": False, "error": "요청 시간 초과"}
-        except Exception as e:
-            logger.error(f"트렌드 조회 오류: {str(e)}")
-            if attempt < retry:
-                time.sleep(0.5)
-                continue
-            return {"success": False, "error": str(e)}
-
-#############################################
-# 네이버 플레이스 리뷰 수집
-#############################################
-def get_place_reviews(keyword, max_count=20):
-    """네이버 플레이스에서 상위 업체 리뷰 수 수집"""
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "Referer": "https://m.place.naver.com/"
-    }
-
     try:
-        url = f"https://m.search.naver.com/search.naver?query={quote(keyword)}&where=m_local"
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.post(url, headers=headers, json=payload, timeout=API_TIMEOUT)
         
-        if response.status_code != 200:
-            return {"success": False, "error": "검색 실패"}
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("results", [])
+            if results and results[0].get("data"):
+                return {"success": True, "data": results[0]["data"]}
+        return {"success": False, "error": "데이터 없음"}
         
-        html = response.text
-        
-        reviews = []
-        blog_reviews = []
-        
-        review_pattern = r'방문자리뷰\s*(\d[\d,]*)'
-        review_matches = re.findall(review_pattern, html)
-        for match in review_matches[:max_count]:
-            try:
-                reviews.append(int(match.replace(',', '')))
-            except:
-                pass
-        
-        blog_pattern = r'블로그리뷰\s*(\d[\d,]*)'
-        blog_matches = re.findall(blog_pattern, html)
-        for match in blog_matches[:max_count]:
-            try:
-                blog_reviews.append(int(match.replace(',', '')))
-            except:
-                pass
-        
-        if len(reviews) < 5:
-            json_pattern = r'"visitorReviewCount"\s*:\s*(\d+)'
-            json_matches = re.findall(json_pattern, html)
-            for match in json_matches[:max_count]:
-                try:
-                    reviews.append(int(match))
-                except:
-                    pass
-        
-        if len(blog_reviews) < 5:
-            json_blog_pattern = r'"blogReviewCount"\s*:\s*(\d+)'
-            json_blog_matches = re.findall(json_blog_pattern, html)
-            for match in json_blog_matches[:max_count]:
-                try:
-                    blog_reviews.append(int(match))
-                except:
-                    pass
-        
-        if reviews or blog_reviews:
-            avg_review = sum(reviews) / len(reviews) if reviews else 0
-            avg_blog = sum(blog_reviews) / len(blog_reviews) if blog_reviews else 0
-            
-            return {
-                "success": True,
-                "avg_review": int(avg_review),
-                "avg_blog": int(avg_blog),
-                "review_count": len(reviews),
-                "blog_count": len(blog_reviews),
-                "reviews": reviews[:20],
-                "blog_reviews": blog_reviews[:20]
-            }
-        
-        return {"success": False, "error": "리뷰 데이터 추출 실패"}
-        
+    except requests.Timeout:
+        return {"success": False, "error": "타임아웃"}
     except Exception as e:
-        logger.error(f"리뷰 수집 오류: {str(e)}")
         return {"success": False, "error": str(e)}
 
 #############################################
-# 업체 수 추정
+# 업체 수 / 리뷰 추정 (API 호출 없이)
 #############################################
 def estimate_business_count(search_volume, comp_idx, region=None):
-    """검색량과 경쟁도를 기반으로 업체 수 추정"""
-
-    COMP_RATIO = {
-        '높음': 0.08,
-        '중간': 0.05,
-        '낮음': 0.03
-    }
-
+    COMP_RATIO = {'높음': 0.08, '중간': 0.05, '낮음': 0.03}
     base_ratio = COMP_RATIO.get(comp_idx, 0.05)
     estimated = int(search_volume * base_ratio)
 
@@ -540,8 +431,6 @@ def estimate_business_count(search_volume, comp_idx, region=None):
     return {"min": min_count, "max": max_count, "estimated": estimated}
 
 def estimate_reviews(search_volume, comp_idx):
-    """검색량 기반 평균 리뷰 수 추정"""
-
     if search_volume >= 100000:
         avg_review = random.randint(280, 350)
         avg_blog = random.randint(90, 130)
@@ -561,21 +450,18 @@ def estimate_reviews(search_volume, comp_idx):
     COMP_MULTIPLIER = {'높음': 1.2, '낮음': 0.8}
     multiplier = COMP_MULTIPLIER.get(comp_idx, 1.0)
 
-    avg_review = int(avg_review * multiplier)
-    avg_blog = int(avg_blog * multiplier)
-
-    return {"avg_review": avg_review, "avg_blog": avg_blog}
+    return {
+        "avg_review": int(avg_review * multiplier),
+        "avg_blog": int(avg_blog * multiplier)
+    }
 
 def extract_region(keyword):
-    """키워드에서 지역명 추출"""
     for region in REGION_KEYWORDS:
         if region in keyword:
             return region, REGION_DATA[region]
     return None, DEFAULT_REGION_DATA
 
 def calculate_competition_level(search_volume, avg_review):
-    """검색량과 리뷰 수 기반 경쟁 강도 계산 (1~4)"""
-
     if search_volume >= 100000:
         volume_score = 2
     elif search_volume >= 50000:
@@ -605,8 +491,6 @@ def calculate_competition_level(search_volume, avg_review):
         return 1
 
 def generate_ad_strategy(analysis):
-    """경쟁 강도 기반 동적 광고 전략 생성"""
-
     search_volume = 0
     avg_review = 0
 
@@ -633,13 +517,15 @@ def generate_ad_strategy(analysis):
     lines.append("• 파워링크: 상시 운영")
     lines.append(f"• 블로그체험단: 최소 월{strategy['blog']['min']}회 / 권장 월{strategy['blog']['rec']}회")
     lines.append(f"• 인스타/메타: 최소 월{strategy['insta']['min']}회 / 권장 월{strategy['insta']['rec']}회")
-    lines.append(f"• 지역광고(당근,MY): 최소 월{strategy['local']['min']}회 / 권장 월{strategy['local']['rec']}회")
+    lines.append(f"• 지역광고: 최소 월{strategy['local']['min']}회 / 권장 월{strategy['local']['rec']}회")
 
     return "\n".join(lines), level
 
-def get_commercial_analysis(keyword):
-    """키워드 기반 상권 분석"""
-
+#############################################
+# 상권분석 (병렬 처리 + 타임아웃)
+#############################################
+def get_commercial_analysis_fast(keyword):
+    """상권분석 - 병렬 처리로 속도 최적화"""
     region, region_data = extract_region(keyword)
 
     result = {
@@ -652,7 +538,8 @@ def get_commercial_analysis(keyword):
         "business_count": None
     }
 
-    search_result = get_keyword_data(keyword)
+    # 필수: 검색 데이터 (동기 호출)
+    search_result = get_keyword_data_fast(keyword)
     if search_result["success"]:
         kw = search_result["data"][0]
         pc = parse_count(kw.get("monthlyPcQcCnt"))
@@ -669,37 +556,35 @@ def get_commercial_analysis(keyword):
         }
         
         result["business_count"] = estimate_business_count(total, comp_idx, region)
+        
+        # 리뷰 추정 (API 호출 없이)
+        estimated = estimate_reviews(total, comp_idx)
+        result["review_data"] = {
+            "success": True,
+            "avg_review": estimated["avg_review"],
+            "avg_blog": estimated["avg_blog"],
+            "estimated": True
+        }
 
-    trend_result = get_datalab_trend(keyword)
-    if trend_result["success"]:
-        series = trend_result["data"]
-        change = 0
-        if len(series) >= 6:
-            last3 = sum(p.get("ratio", 0) for p in series[-3:]) / 3
-            prev3 = sum(p.get("ratio", 0) for p in series[-6:-3]) / 3
-            change = ((last3 - prev3) / prev3) * 100 if prev3 > 0 else 0
-        result["trend_data"] = {"series": series, "change": change}
-
-    review_result = get_place_reviews(keyword)
-    if review_result["success"]:
-        result["review_data"] = review_result
-    else:
-        if result["search_data"]:
-            estimated = estimate_reviews(
-                result["search_data"]["total"],
-                result["search_data"]["comp_idx"]
-            )
-            result["review_data"] = {
-                "success": True,
-                "avg_review": estimated["avg_review"],
-                "avg_blog": estimated["avg_blog"],
-                "estimated": True
-            }
+    # 선택: 트렌드 (비동기 - 실패해도 무시)
+    try:
+        future = executor.submit(get_datalab_trend_fast, keyword)
+        trend_result = future.result(timeout=1.5)
+        if trend_result["success"]:
+            series = trend_result["data"]
+            change = 0
+            if len(series) >= 6:
+                last3 = sum(p.get("ratio", 0) for p in series[-3:]) / 3
+                prev3 = sum(p.get("ratio", 0) for p in series[-6:-3]) / 3
+                change = ((last3 - prev3) / prev3) * 100 if prev3 > 0 else 0
+            result["trend_data"] = {"series": series, "change": change}
+    except:
+        pass
 
     return result
 
 def format_commercial_analysis(analysis):
-    """상권분석 결과 포맷팅"""
+    """상권분석 결과 포맷팅 (간소화)"""
 
     keyword = analysis["keyword"]
     region = analysis["region"]
@@ -745,38 +630,21 @@ def format_commercial_analysis(analysis):
         lines.append(f"평균 블로그: {rd['avg_blog']}개")
         target_review = int(rd['avg_review'] * 1.1)
         lines.append(f"→ 목표: 리뷰 {target_review}개 이상")
-    else:
-        lines.append("데이터 수집 실패")
     lines.append("")
 
     lines.append("▶ 매출 분석")
     sales = region_data["sales"]
     price = region_data["price"]
-    avg_size = region_data.get("avg_size", {"min": 25, "max": 40})
-
-    pyeong_sales_min = int(sales["min"] * 10000 / avg_size["max"] / 10000)
-    pyeong_sales_max = int(sales["max"] * 10000 / avg_size["min"] / 10000)
-
     lines.append(f"평균매출: 월 {sales['min']:,}~{sales['max']:,}만원")
     lines.append(f"객단가: {price['min']:,}~{price['max']:,}원")
-    lines.append(f"평당매출: 약 {pyeong_sales_min}~{pyeong_sales_max}만원 ({avg_size['min']}~{avg_size['max']}평 기준)")
     lines.append("")
 
     lines.append("▶ 결제 시간대")
     weekday = region_data["weekday_ratio"]
     peak_lunch = region_data.get("peak_lunch", 35)
     peak_dinner = region_data.get("peak_dinner", 40)
-    other = 100 - peak_lunch - peak_dinner
-
-    lines.append(f"점심 11:30~13:00 ({peak_lunch}%)")
-    lines.append(f"저녁 18:00~20:00 ({peak_dinner}%)")
-    lines.append(f"기타 시간대 ({other}%)")
+    lines.append(f"점심 ({peak_lunch}%) / 저녁 ({peak_dinner}%)")
     lines.append(f"주중 {weekday}% / 주말 {100-weekday}%")
-    lines.append("")
-
-    lines.append("▶ 예상 클릭률 (업종 평균)")
-    lines.append("모바일: 약 2.3%")
-    lines.append("PC: 약 1.1%")
     lines.append("")
 
     ad_strategy, comp_level = generate_ad_strategy(analysis)
@@ -784,57 +652,37 @@ def format_commercial_analysis(analysis):
     lines.append("")
 
     lines.append("▶ 인사이트")
-    insights = generate_insights_v2(analysis, region_data, comp_level)
+    insights = generate_insights_fast(analysis, region_data, comp_level)
     lines.extend(insights)
 
     return "\n".join(lines)
 
-def generate_insights_v2(analysis, region_data, comp_level=2):
-    """데이터 기반 인사이트 v2"""
+def generate_insights_fast(analysis, region_data, comp_level=2):
+    """빠른 인사이트 생성"""
     insights = []
 
     peak_lunch = region_data.get("peak_lunch", 35)
     peak_dinner = region_data.get("peak_dinner", 40)
 
     if peak_lunch >= 40:
-        insights.append("• 점심 피크 → 11시 전 상위노출 세팅 필수")
+        insights.append("• 점심 피크 → 11시 전 상위노출 세팅")
     elif peak_dinner >= 45:
-        insights.append("• 저녁 피크 → 17시 광고 집중, 웨이팅 관리")
+        insights.append("• 저녁 피크 → 17시 광고 집중")
     else:
-        insights.append("• 점심/저녁 균등 → 하루 2회 푸시 알림 효과적")
+        insights.append("• 점심/저녁 균등 → 하루 2회 푸시")
 
     char = region_data.get("characteristics", "")
     if "직장인" in char:
-        insights.append("• 직장인 타겟 → 런치세트 12,000원대 구성")
+        insights.append("• 직장인 → 런치세트 구성")
     elif "가족" in char:
-        insights.append("• 가족 타겟 → 키즈메뉴/놀이공간 강조")
-    elif "유흥" in char or "데이트" in char:
-        insights.append("• 데이트 타겟 → 분위기/인테리어 사진 필수")
-    elif "관광" in char:
-        insights.append("• 관광객 타겟 → 외국어 메뉴/네이버 예약 필수")
+        insights.append("• 가족 타겟 → 키즈메뉴 강조")
 
-    if analysis["review_data"]:
-        avg_review = analysis["review_data"]["avg_review"]
-        if comp_level >= 3:
-            insights.append(f"• 리뷰 {avg_review}개 이상 필수, 사진 리뷰 유도")
-        else:
-            insights.append(f"• 리뷰 {avg_review}개 목표, 꾸준히 확보")
+    if comp_level >= 3:
+        insights.append("• 경쟁 치열 → 차별화 필수")
+    else:
+        insights.append("• 경쟁 낮음 → 선점 효과 유리")
 
-    if analysis["trend_data"]:
-        change = analysis["trend_data"]["change"]
-        if change <= -15:
-            insights.append("• 검색 하락 중 → SNS 바이럴로 반전 필요")
-        elif change >= 15:
-            insights.append("• 검색 상승 중 → 지금이 마케팅 적기!")
-        else:
-            insights.append("• 검색 유지 중 → 꾸준한 리뷰 관리 필수")
-
-    if comp_level == 4:
-        insights.append("• 초경쟁 → 차별화 컨셉/시그니처 메뉴 필수")
-    elif comp_level == 1:
-        insights.append("• 경쟁 낮음 → 선점 효과, 빠른 리뷰 확보 유리")
-
-    return insights[:5]
+    return insights[:3]
 
 #############################################
 # 기능 1: 검색량 조회
@@ -846,7 +694,7 @@ def get_search_volume(keyword):
             return "최대 5개 키워드까지만 조회 가능합니다."
         return get_multi_search_volume(keywords[:5])
 
-    result = get_keyword_data(keyword)
+    result = get_keyword_data_fast(keyword)
     if not result["success"]:
         return f"조회 실패: {result['error']}"
 
@@ -863,26 +711,32 @@ def get_search_volume(keyword):
 ※ 도움말: "도움말" 입력"""
 
 def get_multi_search_volume(keywords):
-    """다중 키워드 검색량"""
+    """다중 키워드 검색량 (병렬 처리)"""
     lines = ["[검색량 비교]", ""]
-
-    for keyword in keywords:
-        keyword = keyword.replace(" ", "")
-        result = get_keyword_data(keyword)
-        
+    
+    def fetch_one(kw):
+        kw = kw.replace(" ", "")
+        result = get_keyword_data_fast(kw)
         if result["success"]:
-            kw = result["data"][0]
-            pc = parse_count(kw.get("monthlyPcQcCnt"))
-            mobile = parse_count(kw.get("monthlyMobileQcCnt"))
+            data = result["data"][0]
+            pc = parse_count(data.get("monthlyPcQcCnt"))
+            mobile = parse_count(data.get("monthlyMobileQcCnt"))
             total = pc + mobile
             mobile_ratio = (mobile * 100 // total) if total > 0 else 0
-            
-            lines.append(f"▸ {kw.get('relKeyword', keyword)}")
-            lines.append(f"  {format_number(total)}회 (모바일 {mobile_ratio}%)")
-        else:
-            lines.append(f"▸ {keyword}")
-            lines.append(f"  조회 실패")
-        lines.append("")
+            return f"▸ {data.get('relKeyword', kw)}\n  {format_number(total)}회 (모바일 {mobile_ratio}%)"
+        return f"▸ {kw}\n  조회 실패"
+    
+    # 병렬 처리
+    futures = [executor.submit(fetch_one, kw) for kw in keywords]
+    
+    for future in futures:
+        try:
+            result = future.result(timeout=3)
+            lines.append(result)
+            lines.append("")
+        except:
+            lines.append("▸ 조회 실패")
+            lines.append("")
 
     return "\n".join(lines).strip()
 
@@ -892,8 +746,8 @@ def get_multi_search_volume(keywords):
 def get_related_keywords(keyword):
     try:
         url = f"https://search.naver.com/search.naver?where=nexearch&query={requests.utils.quote(keyword)}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept-Language": "ko-KR,ko;q=0.9"}
-        response = requests.get(url, headers=headers, timeout=10)
+        headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "ko-KR,ko;q=0.9"}
+        response = requests.get(url, headers=headers, timeout=API_TIMEOUT)
 
         if response.status_code == 200:
             pattern = re.findall(r'<div class="tit">([^<]+)</div>', response.text)
@@ -912,13 +766,13 @@ def get_related_keywords(keyword):
                 for i, kw in enumerate(related, 1):
                     result += f"{i}. {kw}\n"
                 return result.strip()
-        
-        return get_related_keywords_api(keyword)
     except:
-        return get_related_keywords_api(keyword)
+        pass
+    
+    return get_related_keywords_api(keyword)
 
 def get_related_keywords_api(keyword):
-    result = get_keyword_data(keyword)
+    result = get_keyword_data_fast(keyword)
     if not result["success"]:
         return f"조회 실패: {result['error']}"
 
@@ -934,10 +788,11 @@ def get_related_keywords_api(keyword):
     return response.strip()
 
 #############################################
-# 기능 3: 광고 단가
+# 기능 3: 광고 단가 (간소화 버전)
 #############################################
-def get_ad_cost(keyword):
-    result = get_keyword_data(keyword)
+def get_ad_cost_fast(keyword):
+    """광고 단가 분석 - 빠른 버전"""
+    result = get_keyword_data_fast(keyword)
     if not result["success"]:
         return f"조회 실패: {result['error']}"
 
@@ -963,19 +818,10 @@ def get_ad_cost(keyword):
     lines.append(f"└ PC: {format_number(pc_qc)}회 ({100-mobile_ratio}%)")
     lines.append("")
 
-    test_bids = [
-        100, 200, 300, 400, 500, 600, 700, 800, 900, 1000,
-        1200, 1500, 1800, 2000, 2200, 2500, 3000, 3500, 4000, 5000,
-        6000, 7000, 8000, 10000, 15000
-    ]
+    # 입찰가 테스트 (핵심만)
+    test_bids = [200, 500, 1000, 2000, 3000, 5000]
 
-    mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
-
-    efficient_bid = None
-    efficient_clicks = 0
-    efficient_cost = 0
-    daily_budget = 10000
-    unique_selected = []
+    mobile_perf = get_performance_estimate_fast(keyword_name, test_bids, 'MOBILE')
 
     if mobile_perf.get("success"):
         mobile_estimates = mobile_perf["data"].get("estimate", [])
@@ -983,183 +829,30 @@ def get_ad_cost(keyword):
         
         if valid_estimates:
             lines.append("━━━━━━━━━━━━━━")
-            lines.append("📱 모바일 성과 분석")
+            lines.append("📱 모바일 성과")
             lines.append("━━━━━━━━━━━━━━")
             lines.append("")
-            lines.append("입찰가별 예상 성과")
-            lines.append("")
             
-            max_clicks = max(e.get('clicks', 0) for e in valid_estimates)
-            
-            first_max_bid = None
-            for e in sorted(valid_estimates, key=lambda x: x.get('bid', 0)):
-                if e.get('clicks', 0) == max_clicks:
-                    first_max_bid = e.get('bid', 0)
-                    break
-            
-            target_ratios = [0.2, 0.4, 0.6, 0.8, 1.0]
-            selected_bids = []
-
-            for i, ratio in enumerate(target_ratios):
-                target_clicks = int(max_clicks * ratio)
-                closest = min(valid_estimates, 
-                            key=lambda x: abs(x.get('clicks', 0) - target_clicks))
-                selected_bids.append(closest)
-
-            seen_bids = set()
-            unique_selected = []
-            for e in selected_bids:
-                bid = e.get('bid', 0)
-                if bid not in seen_bids:
-                    seen_bids.add(bid)
-                    unique_selected.append(e)
-
-            max_clicks_in_selected = max(e.get('clicks', 0) for e in unique_selected) if unique_selected else 0
-
-            attempt_count = 0
-            while len(unique_selected) < 5 and attempt_count < len(valid_estimates):
-                for e in sorted(valid_estimates, key=lambda x: x.get('bid', 0)):
-                    bid = e.get('bid', 0)
-                    clicks = e.get('clicks', 0)
-                    
-                    if bid in seen_bids:
-                        continue
-                    
-                    if clicks == max_clicks_in_selected:
-                        continue
-                    
-                    if any(e2.get('clicks', 0) == clicks for e2 in unique_selected):
-                        continue
-                    
-                    unique_selected.append(e)
-                    seen_bids.add(bid)
-                    break
-                else:
-                    break
-                attempt_count += 1
-
-            first_max_bid_in_selected = None
-            for e in sorted(unique_selected, key=lambda x: x.get('bid', 0)):
-                if e.get('clicks', 0) == max_clicks_in_selected:
-                    first_max_bid_in_selected = e.get('bid', 0)
-                    break
-
-            if first_max_bid_in_selected:
-                candidates = [e for e in valid_estimates 
-                            if e.get('clicks', 0) == max_clicks_in_selected
-                            and e.get('bid', 0) > first_max_bid_in_selected]
-                if candidates:
-                    next_bid = min(candidates, key=lambda x: x.get('bid', 0))
-                    if next_bid.get('bid', 0) not in seen_bids:
-                        unique_selected.append(next_bid)
-
-            unique_selected.sort(key=lambda x: x.get('bid', 0))
-            
-            efficient_est = None
-            if len(unique_selected) >= 5:
-                efficient_est = unique_selected[4]
-            elif len(unique_selected) >= 3:
-                efficient_est = unique_selected[-1]
-            elif len(unique_selected) > 0:
-                efficient_est = unique_selected[0]
-            
-            if efficient_est:
-                efficient_bid = efficient_est.get('bid', 0)
-                efficient_clicks = efficient_est.get('clicks', 0)
-                efficient_cost = efficient_est.get('cost', 0)
-                
-                if efficient_cost == 0:
-                    efficient_cost = int(efficient_clicks * efficient_bid * 0.8)
-            
-            for est in unique_selected:
+            for est in valid_estimates[:5]:
                 bid = est.get('bid', 0)
                 clicks = est.get('clicks', 0)
-                cost = est.get('cost', 0)
-                
-                if cost == 0:
-                    cost = int(clicks * bid * 0.8)
-                
-                lines.append(f"{format_number(bid)}원 → 월 {clicks}회 클릭 | {format_won(cost)}")
-            
-            if first_max_bid_in_selected:
-                lines.append(f"  ↑ {format_number(first_max_bid_in_selected)}원 이상은 효과 동일")
-            
-            if len(unique_selected) < 5:
-                lines.append("")
-                lines.append("※ 입찰가 데이터 부족으로 일부만 표시")
+                cost = est.get('cost', 0) or int(clicks * bid * 0.8)
+                lines.append(f"{format_number(bid)}원 → 월 {clicks}회 | {format_won(cost)}")
             
             lines.append("")
-
-    if efficient_bid:
-        lines.append("━━━━━━━━━━━━━━")
-        lines.append("🎯 추천 입찰가")
-        lines.append("━━━━━━━━━━━━━━")
-        lines.append("")
-        lines.append(f"✅ 추천: {format_number(efficient_bid)}원")
-        lines.append(f"├ 예상 클릭: 월 {efficient_clicks}회")
-        lines.append(f"├ 예상 비용: 월 {format_won(efficient_cost)}")
-        
-        cpc = int(efficient_cost / efficient_clicks) if efficient_clicks > 0 else 0
-        lines.append(f"├ 클릭당 비용: 약 {format_number(cpc)}원")
-        
-        daily_budget = max(efficient_cost / 30, 10000)
-        lines.append(f"└ 일 예산: 약 {format_won(daily_budget)}")
-        lines.append("")
-        
-        if len(unique_selected) >= 4:
-            lower_est = unique_selected[max(0, len(unique_selected) - 3)]
-            lower_bid = lower_est.get('bid', 0)
-            lower_clicks = lower_est.get('clicks', 0)
-            lower_cost = lower_est.get('cost', 0)
             
-            if lower_cost == 0:
-                lower_cost = int(lower_clicks * lower_bid * 0.8)
-            
-            if lower_bid < efficient_bid:
-                lines.append(f"※ 예산 적으면 {format_number(lower_bid)}원도 가능 (월 {lower_clicks}회/{format_won(lower_cost)})")
-        
-        lines.append("")
-
-    pc_perf = get_performance_estimate(keyword_name, test_bids, 'PC')
-
-    if pc_perf.get("success"):
-        pc_estimates = pc_perf["data"].get("estimate", [])
-        valid_pc = [e for e in pc_estimates if e.get('clicks', 0) > 0]
-        
-        if valid_pc:
-            best_pc = max(valid_pc, key=lambda x: x.get('clicks', 0))
-            pc_bid = best_pc.get('bid', 0)
-            pc_clicks = best_pc.get('clicks', 0)
-            pc_cost = best_pc.get('cost', 0)
-            
-            if pc_cost == 0:
-                pc_cost = int(pc_clicks * pc_bid * 0.8)
-            
+            # 추천 입찰가 (클릭수 최대)
+            best = max(valid_estimates, key=lambda x: x.get('clicks', 0))
             lines.append("━━━━━━━━━━━━━━")
-            lines.append("💻 PC 예상 성과")
+            lines.append("🎯 추천")
             lines.append("━━━━━━━━━━━━━━")
             lines.append("")
-            lines.append(f"추천: {format_number(pc_bid)}원")
-            lines.append(f"├ 예상 클릭: 월 {pc_clicks}회")
-            lines.append(f"└ 예상 비용: 월 {format_won(pc_cost)}")
-            lines.append("")
-
-    if efficient_bid:
-        lines.append("━━━━━━━━━━━━━━")
-        lines.append("📋 운영 가이드")
-        lines.append("━━━━━━━━━━━━━━")
-        lines.append("")
-        lines.append("시작 설정")
-        lines.append(f"• 입찰가: {format_number(efficient_bid)}원")
-        lines.append(f"• 일 예산: {format_won(daily_budget)}")
-        lines.append(f"• 월 예산: 약 {format_won(efficient_cost)}")
-        lines.append("")
-        lines.append("운영 팁")
-        lines.append("• 1주일 후 CTR 확인 (1.5% 이상 목표)")
-        lines.append("• 전환 발생 시 예산 증액 검토")
-        lines.append("• 품질점수 관리로 CPC 절감 가능")
-        lines.append("")
-        lines.append("━━━━━━━━━━━━━━")
+            lines.append(f"입찰가: {format_number(best.get('bid', 0))}원")
+            lines.append(f"예상 클릭: 월 {best.get('clicks', 0)}회")
+            cost = best.get('cost', 0) or int(best.get('clicks', 0) * best.get('bid', 0) * 0.8)
+            lines.append(f"예상 비용: 월 {format_won(cost)}")
+    else:
+        lines.append("성과 예측 데이터를 가져올 수 없습니다.")
 
     return "\n".join(lines)
 
@@ -1214,7 +907,10 @@ def get_fortune(birthdate=None):
 재미있고 긍정적으로. 이모티콘 없이."""
 
     try:
-        response = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.9, "maxOutputTokens": 500}}, timeout=4)
+        response = requests.post(url, json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 400}
+        }, timeout=3)
         if response.status_code == 200:
             return response.json()["candidates"][0]["content"]["parts"][0]["text"]
     except:
@@ -1258,31 +954,6 @@ def get_fortune_fallback(birthdate=None):
 # 기능 6: 로또
 #############################################
 def get_lotto():
-    if not GEMINI_API_KEY:
-        return get_lotto_fallback()
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    prompt = """로또 번호 5세트 추천. 1~45, 각 6개, 오름차순.
-형식:
-[로또 번호 추천]
-
-00, 00, 00, 00, 00, 00
-00, 00, 00, 00, 00, 00
-00, 00, 00, 00, 00, 00
-00, 00, 00, 00, 00, 00
-00, 00, 00, 00, 00, 00
-행운을 빕니다!
-※ 재미로만 즐기세요!"""
-
-    try:
-        response = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 1.0, "maxOutputTokens": 400}}, timeout=4)
-        if response.status_code == 200:
-            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except:
-        pass
-    return get_lotto_fallback()
-
-def get_lotto_fallback():
     result = "[로또 번호 추천]\n\n"
     for i in range(1, 6):
         numbers = sorted(random.sample(range(1, 46), 6))
@@ -1310,10 +981,10 @@ def extract_place_id_from_url(url_or_id):
 def get_place_keywords(place_id):
     headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", "Accept-Language": "ko-KR,ko;q=0.9"}
 
-    for category in ['restaurant', 'place', 'cafe', 'hospital', 'beauty']:
+    for category in ['restaurant', 'place', 'cafe']:
         try:
             url = f"https://m.place.naver.com/{category}/{place_id}/home"
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, headers=headers, timeout=API_TIMEOUT)
             if response.status_code == 200:
                 html = response.content.decode('utf-8', errors='ignore')
                 match = re.search(r'"keywordList"\s*:\s*\[((?:"[^"]*",?\s*)*)\]', html)
@@ -1359,7 +1030,7 @@ def get_autocomplete(keyword):
     try:
         params = {"q": keyword, "con": "1", "frm": "nv", "ans": "2", "r_format": "json", "r_enc": "UTF-8", "r_unicode": "0", "t_koreng": "1", "run": "2", "rev": "4", "q_enc": "UTF-8", "st": "100"}
         headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.naver.com/"}
-        response = requests.get("https://ac.search.naver.com/nx/ac", params=params, headers=headers, timeout=5)
+        response = requests.get("https://ac.search.naver.com/nx/ac", params=params, headers=headers, timeout=API_TIMEOUT)
 
         if response.status_code == 200:
             suggestions = []
@@ -1377,7 +1048,6 @@ def get_autocomplete(keyword):
                 result = f"[자동완성] {keyword}\n\n"
                 for i, s in enumerate(suggestions, 1):
                     result += f"{i}. {s}\n"
-                result += f"\n※ 띄어쓰기에 따라 결과 다름"
                 return result
     except:
         pass
@@ -1388,25 +1058,15 @@ def get_autocomplete(keyword):
 # 기능 9: 유튜브 자동완성어
 #############################################
 def get_youtube_autocomplete(keyword):
-    """유튜브 자동완성 키워드 수집"""
     try:
         url = "https://suggestqueries.google.com/complete/search"
-        params = {
-            "client": "youtube",
-            "ds": "yt",
-            "q": keyword,
-            "hl": "ko",
-            "gl": "kr"
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
+        params = {"client": "youtube", "ds": "yt", "q": keyword, "hl": "ko", "gl": "kr"}
+        headers = {"User-Agent": "Mozilla/5.0"}
 
-        response = requests.get(url, params=params, headers=headers, timeout=5)
+        response = requests.get(url, params=params, headers=headers, timeout=API_TIMEOUT)
         
         if response.status_code == 200:
             text = response.text
-            
             start_idx = text.find('(')
             end_idx = text.rfind(')')
             if start_idx != -1 and end_idx != -1:
@@ -1425,14 +1085,12 @@ def get_youtube_autocomplete(keyword):
                     result = f"[유튜브 자동완성] {keyword}\n\n"
                     for i, s in enumerate(suggestions[:15], 1):
                         result += f"{i}. {s}\n"
-                    result += f"\n총 {len(suggestions[:15])}개"
                     return result
         
         return f"[유튜브 자동완성] {keyword}\n\n결과 없음"
         
     except Exception as e:
-        logger.error(f"유튜브 자동완성 오류: {str(e)}")
-        return f"[유튜브 자동완성] {keyword}\n\n조회 실패: {str(e)}"
+        return f"[유튜브 자동완성] {keyword}\n\n조회 실패"
 
 #############################################
 # 도움말
@@ -1441,40 +1099,29 @@ def get_help():
     return """[사용 가이드]
 
 ▶ 키워드 검색량 (최대 5개)
-방법) 키워드1, 키워드2, 키워드3, 키워드4, 키워드5
-예) 인천맛집,강남맛집,서울맛집,부산맛집,전주맛집
+예) 인천맛집,강남맛집,서울맛집
 
-▶ 상권분석 (트렌드+매출+고객)
-방법) 상권+키워드
+▶ 상권분석
 예) 상권 강남맛집
 
 ▶ 연관 검색어
-방법) 연관+키워드
 예) 연관 인천맛집
 
 ▶ 자동완성어(네이버)
-방법) 자동+키워드
 예) 자동 인천맛집
 
 ▶ 자동완성어(유튜브)
-방법) 유튜브+키워드
 예) 유튜브 인천맛집
 
-▶ CPC 파워링크 광고 단가
-방법) 광고+키워드
+▶ CPC 광고 단가
 예) 광고 인천맛집
 
 ▶ 대표 키워드
-방법) 대표+플레이스ID
-방법) 대표+플레이스 주소
 예) 대표 12345678
-예) 대표 m.place.naver.com/restaurant/1309812619/home
 
 ▶ 재미 기능
 운세 → 운세 870114
-로또 → 로또
-
-기능 추가를 원하시면 소식에 댓글 남겨주세요."""
+로또 → 로또"""
 
 #############################################
 # 테스트 라우트
@@ -1483,87 +1130,47 @@ def get_help():
 def home():
     return "서버 정상 작동 중"
 
-@app.route('/test-review')
-def test_review():
-    keyword = request.args.get('q', '부평맛집')
-    result = get_place_reviews(keyword)
-
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>리뷰 수집 테스트</title></head>
-<body>
-<h2>키워드: {keyword}</h2>
-<p><b>성공:</b> {result.get('success')}</p>
-<p><b>평균 리뷰:</b> {result.get('avg_review', 'N/A')}</p>
-<p><b>평균 블로그:</b> {result.get('avg_blog', 'N/A')}</p>
-<p><b>수집 개수:</b> 리뷰 {result.get('review_count', 0)}개 / 블로그 {result.get('blog_count', 0)}개</p>
-"""
-    if result.get('reviews'):
-        html += f"<p><b>리뷰 리스트:</b> {result['reviews']}</p>"
-    if result.get('error'):
-        html += f"<p style='color:red'>오류: {result['error']}</p>"
-    html += "</body></html>"
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
 @app.route('/test-commercial')
 def test_commercial():
     keyword = request.args.get('q', '부평맛집')
-    analysis = get_commercial_analysis(keyword)
+    start = time.time()
+    analysis = get_commercial_analysis_fast(keyword)
     result = format_commercial_analysis(analysis)
+    elapsed = time.time() - start
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>상권분석 테스트</title></head>
 <body>
 <h2>키워드: {keyword}</h2>
+<h3>처리 시간: {elapsed:.2f}초</h3>
 <h3>글자 수: {len(result)}자</h3>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
 </body></html>"""
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
-@app.route('/test-place')
-def test_place():
-    place_id = request.args.get('id', '37838432')
-    result = get_place_keywords(place_id)
-
-    html = f"<h2>ID: {place_id}</h2><h3>{'성공' if result['success'] else '실패'}</h3>"
-    if result['success']:
-        html += "<ul>" + "".join(f"<li>{kw}</li>" for kw in result['keywords']) + "</ul>"
-    else:
-        html += f"<p>{result.get('error')}</p>"
-
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 @app.route('/test-ad')
 def test_ad():
     keyword = request.args.get('q', '부평맛집')
-    result = get_ad_cost(keyword)
+    start = time.time()
+    result = get_ad_cost_fast(keyword)
+    elapsed = time.time() - start
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>광고분석 테스트</title></head>
 <body>
 <h2>키워드: {keyword}</h2>
-<h3>글자 수: {len(result)}자</h3>
-<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
-</body></html>"""
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
-@app.route('/test-youtube')
-def test_youtube():
-    keyword = request.args.get('q', '부평맛집')
-    result = get_youtube_autocomplete(keyword)
-
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>유튜브 자동완성 테스트</title></head>
-<body>
-<h2>키워드: {keyword}</h2>
+<h3>처리 시간: {elapsed:.2f}초</h3>
 <pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
 </body></html>"""
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 #############################################
-# 카카오 스킬
+# 카카오 스킬 (타임아웃 방어)
 #############################################
 @app.route('/skill', methods=['POST'])
 def kakao_skill():
+    start_time = time.time()
+    
     try:
         request_data = request.get_json()
         if request_data is None:
@@ -1578,9 +1185,12 @@ def kakao_skill():
         
         lower_input = user_utterance.lower()
         
-        # 도움말
+        # 빠른 응답 (API 호출 없음)
         if lower_input in ["도움말", "도움", "사용법", "help", "?", "메뉴"]:
             return create_kakao_response(get_help())
+        
+        if lower_input in ["로또", "로또번호", "lotto"]:
+            return create_kakao_response(get_lotto())
         
         # 운세
         if lower_input.startswith("운세 "):
@@ -1592,16 +1202,19 @@ def kakao_skill():
         if lower_input in ["운세", "오늘의운세", "오늘운세"]:
             return create_kakao_response(get_fortune())
         
-        # 로또
-        if lower_input in ["로또", "로또번호", "lotto"]:
-            return create_kakao_response(get_lotto())
+        # 타임아웃 체크 함수
+        def check_timeout():
+            if time.time() - start_time > SKILL_TIMEOUT:
+                raise TimeoutError("처리 시간 초과")
         
-        # 상권분석
+        # 상권분석 (최적화 버전)
         if any(lower_input.startswith(cmd) for cmd in ["상권 ", "상세 ", "인사이트 ", "트렌드 "]):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
             if keyword:
-                analysis = get_commercial_analysis(keyword)
+                check_timeout()
+                analysis = get_commercial_analysis_fast(keyword)
+                check_timeout()
                 return create_kakao_response(format_commercial_analysis(analysis))
             return create_kakao_response("예) 상권 부평맛집")
         
@@ -1634,12 +1247,13 @@ def kakao_skill():
                 return create_kakao_response(get_related_keywords(keyword))
             return create_kakao_response("예) 연관 맛집")
         
-        # 광고 단가
+        # 광고 단가 (최적화 버전)
         if lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
             if keyword:
-                return create_kakao_response(get_ad_cost(keyword))
+                check_timeout()
+                return create_kakao_response(get_ad_cost_fast(keyword))
             return create_kakao_response("예) 광고 맛집")
         
         # 기본: 검색량 조회
@@ -1649,9 +1263,11 @@ def kakao_skill():
         else:
             return create_kakao_response(get_search_volume(clean_keyword(keyword)))
 
+    except TimeoutError:
+        return create_kakao_response("처리 시간이 초과되었습니다. 다시 시도해주세요.")
     except Exception as e:
         logger.error(f"스킬 오류: {str(e)}")
-        return create_kakao_response(f"오류: {str(e)}")
+        return create_kakao_response(f"오류가 발생했습니다. 다시 시도해주세요.")
 
 def create_kakao_response(text):
     if len(text) > 1000:
@@ -1666,21 +1282,7 @@ if __name__ == '__main__':
     print(f"검색광고 API: {'✅' if NAVER_API_KEY else '❌'}")
     print(f"DataLab API: {'✅' if NAVER_CLIENT_ID else '❌'}")
     print(f"Gemini API: {'✅' if GEMINI_API_KEY else '❌'}")
-    print(f"공공데이터 API: {'✅' if DATA_GO_KR_API_KEY else '❌'}")
-
-    if validate_required_keys():
-        print("✅ 필수 API 키 확인 완료")
-    else:
-        print("⚠️  일부 기능이 제한될 수 있습니다")
-
     print("====================")
-
-    if os.environ.get('PRODUCTION') == 'true':
-        logging.basicConfig(level=logging.WARNING)
-        logger.setLevel(logging.WARNING)
-        print("운영 모드: WARNING 레벨 로그")
-    else:
-        print("개발 모드: INFO 레벨 로그")
 
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
