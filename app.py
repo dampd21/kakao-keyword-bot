@@ -11,7 +11,7 @@ import json
 import logging
 from datetime import date, timedelta
 from urllib.parse import quote
-import urllib.parse  # ✅ QuickChart용 추가
+import urllib.parse
 
 app = Flask(__name__)
 
@@ -223,7 +223,7 @@ def get_search_volume(keyword):
 ※ 도움말: "도움말" 입력"""
 
 def get_multi_search_volume(keywords):
-    """다중 키워드 검색량 - 개별 출력"""
+    """다중 키워드 검색량"""
     lines = []
     
     for i, keyword in enumerate(keywords):
@@ -299,9 +299,93 @@ def get_related_keywords_api(keyword):
     return response.strip()
 
 #############################################
-# 기본 기능: 광고 단가
+# 기본 기능: 광고 단가 (데이터 수집용)
 #############################################
+def get_ad_cost_data(keyword):
+    """광고 단가 데이터 수집 (그래프용)"""
+    result = get_keyword_data(keyword)
+    if not result["success"]:
+        return None
+    
+    kw = result["data"][0]
+    keyword_name = kw.get('relKeyword', keyword)
+    pc_qc = parse_count(kw.get("monthlyPcQcCnt"))
+    mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
+    total_qc = pc_qc + mobile_qc
+    mobile_ratio = (mobile_qc * 100 // total_qc) if total_qc > 0 else 0
+    comp_idx = kw.get("compIdx", "중간")
+    
+    test_bids = [
+        100, 200, 300, 400, 500, 600, 700, 800, 900, 1000,
+        1200, 1500, 1800, 2000, 2200, 2500, 3000, 3500, 4000, 5000,
+        6000, 7000, 8000, 10000, 15000
+    ]
+    
+    mobile_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
+    
+    if not mobile_perf.get("success"):
+        return None
+    
+    mobile_estimates = mobile_perf["data"].get("estimate", [])
+    valid_estimates = [e for e in mobile_estimates if e.get('clicks', 0) > 0]
+    
+    if not valid_estimates:
+        return None
+    
+    max_clicks = max(e.get('clicks', 0) for e in valid_estimates)
+    
+    # 대표 입찰가 5개 선택
+    target_ratios = [0.2, 0.4, 0.6, 0.8, 1.0]
+    selected_bids = []
+    
+    for ratio in target_ratios:
+        target_clicks = int(max_clicks * ratio)
+        closest = min(valid_estimates, key=lambda x: abs(x.get('clicks', 0) - target_clicks))
+        selected_bids.append(closest)
+    
+    seen_bids = set()
+    unique_selected = []
+    for e in selected_bids:
+        bid = e.get('bid', 0)
+        if bid not in seen_bids:
+            seen_bids.add(bid)
+            unique_selected.append(e)
+    
+    unique_selected.sort(key=lambda x: x.get('bid', 0))
+    
+    # 추천 입찰가
+    efficient_est = None
+    if len(unique_selected) >= 5:
+        efficient_est = unique_selected[4]
+    elif len(unique_selected) >= 3:
+        efficient_est = unique_selected[-1]
+    elif len(unique_selected) > 0:
+        efficient_est = unique_selected[0]
+    
+    efficient_bid = 0
+    efficient_clicks = 0
+    efficient_cost = 0
+    
+    if efficient_est:
+        efficient_bid = efficient_est.get('bid', 0)
+        efficient_clicks = efficient_est.get('clicks', 0)
+        efficient_cost = efficient_est.get('cost', 0)
+        if efficient_cost == 0:
+            efficient_cost = int(efficient_clicks * efficient_bid * 0.8)
+    
+    return {
+        "keyword": keyword_name,
+        "total_qc": total_qc,
+        "mobile_ratio": mobile_ratio,
+        "comp_idx": comp_idx,
+        "estimates": unique_selected,
+        "efficient_bid": efficient_bid,
+        "efficient_clicks": efficient_clicks,
+        "efficient_cost": efficient_cost
+    }
+
 def get_ad_cost(keyword):
+    """광고 단가 텍스트 출력 (기존 유지)"""
     result = get_keyword_data(keyword)
     if not result["success"]:
         return f"조회 실패: {result['error']}"
@@ -785,7 +869,7 @@ def get_lotto_fallback():
     return result
 
 #############################################
-# 신규 기능: 검색량 비교
+# DataLab API
 #############################################
 def get_datalab_trend(keyword, start_date, end_date):
     """DataLab 트렌드 조회"""
@@ -818,17 +902,15 @@ def get_datalab_trend(keyword, start_date, end_date):
         if response.status_code == 200:
             data = response.json()
             
-            logger.info(f"📊 응답: {json.dumps(data, ensure_ascii=False)[:300]}")
-            
             results = data.get("results", [])
             if results and results[0].get("data"):
                 data_count = len(results[0]["data"])
                 logger.info(f"✅ 데이터 {data_count}개 수신")
                 return {"success": True, "data": results[0]["data"]}
             else:
-                logger.warning(f"⚠️ 빈 결과: {data}")
+                logger.warning(f"⚠️ 빈 결과")
         else:
-            logger.error(f"❌ API 오류 {response.status_code}: {response.text}")
+            logger.error(f"❌ API 오류 {response.status_code}")
         
         return {"success": False, "error": f"상태코드 {response.status_code}"}
         
@@ -840,11 +922,10 @@ def get_datalab_trend(keyword, start_date, end_date):
         return {"success": False, "error": str(e)}
 
 def get_comparison_analysis(keyword):
-    """검색량 전년 비교 분석 - 실제 검색량 기반"""
+    """검색량 전년 비교 분석"""
     
     logger.info(f"🔍 비교 분석 시작: {keyword}")
     
-    # 1. 현재 검색량 조회 (검색광고 API)
     current_data = get_keyword_data(keyword)
     
     if not current_data["success"]:
@@ -859,7 +940,6 @@ def get_comparison_analysis(keyword):
     
     logger.info(f"✅ 현재 검색량: {total_volume_2025:,}회")
     
-    # 2. DataLab으로 트렌드 조회
     today = date.today()
     
     this_year_start = f"{today.year}-01-01"
@@ -872,9 +952,8 @@ def get_comparison_analysis(keyword):
     trend_2025 = get_datalab_trend(keyword, this_year_start, this_year_end)
     trend_2024 = get_datalab_trend(keyword, last_year_start, last_year_end)
     
-    # 3. DataLab 실패 시 현재 데이터만 표시
     if not trend_2025["success"] or not trend_2024["success"]:
-        logger.warning(f"⚠️ DataLab API 실패 - 현재 검색량만 표시")
+        logger.warning(f"⚠️ DataLab API 실패")
         return {
             "keyword": keyword,
             "volume_2025": total_volume_2025,
@@ -893,18 +972,15 @@ def get_comparison_analysis(keyword):
         logger.warning(f"⚠️ DataLab 빈 데이터")
         return create_fallback_comparison(keyword, total_volume_2025, mobile_ratio)
     
-    # 4. ratio 평균으로 증감률 계산
     avg_ratio_2025 = sum(d.get("ratio", 0) for d in data_2025) / len(data_2025)
     avg_ratio_2024 = sum(d.get("ratio", 0) for d in data_2024) / len(data_2024)
     
     change_rate = ((avg_ratio_2025 - avg_ratio_2024) / avg_ratio_2024 * 100) if avg_ratio_2024 > 0 else 0
     
-    # 5. 2024년 검색량 역산
     volume_2024 = int(total_volume_2025 / (1 + change_rate / 100)) if change_rate != 0 else total_volume_2025
     
     logger.info(f"✅ 증감률: {change_rate:+.1f}% → 2024년 추정: {volume_2024:,}회")
     
-    # 6. 최근 6개월 데이터
     recent_6_months_2025 = data_2025[-6:] if len(data_2025) >= 6 else data_2025
     recent_6_months_2024 = data_2024[-6:] if len(data_2024) >= 6 else data_2024
     
@@ -954,53 +1030,44 @@ def create_fallback_comparison(keyword, current_volume, mobile_ratio):
     }
 
 #############################################
-# ✅ QuickChart.io 차트 생성 (신규 추가)
+# QuickChart.io 차트 생성 함수들
 #############################################
-def create_quickchart_url(analysis):
-    """QuickChart.io로 검색량 비교 차트 URL 생성"""
+
+def create_comparison_chart_url(analysis):
+    """비교 분석 막대 그래프 URL 생성"""
     
     try:
         keyword = analysis["keyword"]
         
-        # 월별 데이터 추출
-        months_2025 = [item["period"].split("-")[1] for item in analysis["monthly_2025"]]
+        months = [item["period"].split("-")[1] for item in analysis["monthly_2025"]]
         values_2025 = [int(item["ratio"] * 100) for item in analysis["monthly_2025"]]
-        
-        months_2024 = [item["period"].split("-")[1] for item in analysis["monthly_2024"]]
         values_2024 = [int(item["ratio"] * 100) for item in analysis["monthly_2024"]]
         
-        # Chart.js 설정
         chart_config = {
-            "type": "line",
+            "type": "bar",
             "data": {
-                "labels": [f"{m}월" for m in months_2025],
+                "labels": [f"{m}월" for m in months],
                 "datasets": [
                     {
                         "label": "2024년",
                         "data": values_2024,
+                        "backgroundColor": "rgba(234, 67, 53, 0.7)",
                         "borderColor": "rgb(234, 67, 53)",
-                        "backgroundColor": "rgba(234, 67, 53, 0.1)",
-                        "borderWidth": 3,
-                        "pointRadius": 5,
-                        "pointHoverRadius": 7,
-                        "fill": True
+                        "borderWidth": 2
                     },
                     {
                         "label": "2025년",
                         "data": values_2025,
+                        "backgroundColor": "rgba(66, 133, 244, 0.7)",
                         "borderColor": "rgb(66, 133, 244)",
-                        "backgroundColor": "rgba(66, 133, 244, 0.1)",
-                        "borderWidth": 3,
-                        "pointRadius": 5,
-                        "pointHoverRadius": 7,
-                        "fill": True
+                        "borderWidth": 2
                     }
                 ]
             },
             "options": {
                 "title": {
                     "display": True,
-                    "text": f"{keyword} 검색량 추이",
+                    "text": f"{keyword} 검색량 비교",
                     "fontSize": 20,
                     "fontColor": "#333",
                     "padding": 20
@@ -1034,38 +1101,238 @@ def create_quickchart_url(analysis):
             }
         }
         
-        # JSON을 URL 인코딩
         chart_json = json.dumps(chart_config)
         encoded = urllib.parse.quote(chart_json)
         
-        # QuickChart URL 생성 (API 키 불필요!)
         url = f"https://quickchart.io/chart?c={encoded}&width=800&height=450&backgroundColor=white"
         
-        logger.info(f"✅ 차트 URL 생성: {len(url)}자")
+        logger.info(f"✅ 비교 차트 URL 생성: {len(url)}자")
         
         return url
         
     except Exception as e:
-        logger.error(f"❌ 차트 생성 오류: {str(e)}")
+        logger.error(f"❌ 비교 차트 생성 오류: {str(e)}")
+        return None
+
+def create_ad_chart_url(ad_data):
+    """광고 단가 막대 그래프 URL 생성"""
+    
+    try:
+        keyword = ad_data["keyword"]
+        estimates = ad_data["estimates"]
+        
+        if not estimates:
+            return None
+        
+        labels = []
+        clicks = []
+        colors = []
+        
+        efficient_bid = ad_data["efficient_bid"]
+        
+        for est in estimates:
+            bid = est.get('bid', 0)
+            click = est.get('clicks', 0)
+            
+            labels.append(f"{format_number(bid)}원")
+            clicks.append(click)
+            
+            # 추천 입찰가는 다른 색상
+            if bid == efficient_bid:
+                colors.append("rgba(52, 168, 83, 0.7)")  # 초록색
+            else:
+                colors.append("rgba(66, 133, 244, 0.7)")  # 파란색
+        
+        chart_config = {
+            "type": "bar",
+            "data": {
+                "labels": labels,
+                "datasets": [{
+                    "label": "예상 클릭수 (월)",
+                    "data": clicks,
+                    "backgroundColor": colors,
+                    "borderColor": "rgba(66, 133, 244, 1)",
+                    "borderWidth": 2
+                }]
+            },
+            "options": {
+                "title": {
+                    "display": True,
+                    "text": f"{keyword} 입찰가별 성과",
+                    "fontSize": 20,
+                    "fontColor": "#333",
+                    "padding": 20
+                },
+                "legend": {
+                    "display": False
+                },
+                "scales": {
+                    "yAxes": [{
+                        "ticks": {
+                            "beginAtZero": True,
+                            "fontSize": 14
+                        },
+                        "scaleLabel": {
+                            "display": True,
+                            "labelString": "클릭수 (회/월)",
+                            "fontSize": 14
+                        }
+                    }],
+                    "xAxes": [{
+                        "ticks": {
+                            "fontSize": 12
+                        },
+                        "scaleLabel": {
+                            "display": True,
+                            "labelString": "입찰가",
+                            "fontSize": 14
+                        }
+                    }]
+                }
+            }
+        }
+        
+        chart_json = json.dumps(chart_config)
+        encoded = urllib.parse.quote(chart_json)
+        
+        url = f"https://quickchart.io/chart?c={encoded}&width=800&height=450&backgroundColor=white"
+        
+        logger.info(f"✅ 광고 차트 URL 생성: {len(url)}자")
+        
+        return url
+        
+    except Exception as e:
+        logger.error(f"❌ 광고 차트 생성 오류: {str(e)}")
+        return None
+
+def create_region_charts_url(region_data):
+    """지역 분석 차트 URL 생성 (연령대 파이 + 시간대 막대)"""
+    
+    try:
+        pop_data = get_population_data(region_data)
+        
+        # 1. 연령대 파이 차트
+        age_data = pop_data["by_age"]
+        age_labels = []
+        age_values = []
+        
+        for age, ratio in sorted(age_data.items()):
+            age_labels.append(age.replace('s', '대'))
+            age_values.append(ratio)
+        
+        pie_config = {
+            "type": "pie",
+            "data": {
+                "labels": age_labels,
+                "datasets": [{
+                    "data": age_values,
+                    "backgroundColor": [
+                        "rgba(255, 99, 132, 0.7)",
+                        "rgba(54, 162, 235, 0.7)",
+                        "rgba(255, 206, 86, 0.7)",
+                        "rgba(75, 192, 192, 0.7)",
+                        "rgba(153, 102, 255, 0.7)"
+                    ]
+                }]
+            },
+            "options": {
+                "title": {
+                    "display": True,
+                    "text": "연령대 비율",
+                    "fontSize": 20,
+                    "padding": 20
+                },
+                "legend": {
+                    "position": "right",
+                    "labels": {
+                        "fontSize": 14
+                    }
+                }
+            }
+        }
+        
+        pie_json = json.dumps(pie_config)
+        pie_encoded = urllib.parse.quote(pie_json)
+        pie_url = f"https://quickchart.io/chart?c={pie_encoded}&width=500&height=350&backgroundColor=white"
+        
+        # 2. 시간대별 막대 차트
+        time_data = pop_data["by_time"]
+        time_labels = ["07-09시", "12-13시", "18-19시", "20-22시"]
+        time_values = [
+            time_data["0709"],
+            time_data["1213"],
+            time_data["1819"],
+            time_data["2022"]
+        ]
+        
+        bar_config = {
+            "type": "bar",
+            "data": {
+                "labels": time_labels,
+                "datasets": [{
+                    "label": "유동인구 (명)",
+                    "data": time_values,
+                    "backgroundColor": "rgba(66, 133, 244, 0.7)",
+                    "borderColor": "rgb(66, 133, 244)",
+                    "borderWidth": 2
+                }]
+            },
+            "options": {
+                "title": {
+                    "display": True,
+                    "text": "시간대별 유동인구",
+                    "fontSize": 20,
+                    "padding": 20
+                },
+                "legend": {
+                    "display": False
+                },
+                "scales": {
+                    "yAxes": [{
+                        "ticks": {
+                            "beginAtZero": True,
+                            "fontSize": 14
+                        }
+                    }],
+                    "xAxes": [{
+                        "ticks": {
+                            "fontSize": 14
+                        }
+                    }]
+                }
+            }
+        }
+        
+        bar_json = json.dumps(bar_config)
+        bar_encoded = urllib.parse.quote(bar_json)
+        bar_url = f"https://quickchart.io/chart?c={bar_encoded}&width=700&height=400&backgroundColor=white"
+        
+        logger.info(f"✅ 지역 차트 URL 생성 완료")
+        
+        return {
+            "pie_chart": pie_url,
+            "bar_chart": bar_url
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ 지역 차트 생성 오류: {str(e)}")
         return None
 
 #############################################
-# ✅ 카카오 차트 응답 (신규 추가)
+# 카카오 차트 응답 함수들
 #############################################
-def create_kakao_chart_response(keyword, analysis):
-    """이미지 + 텍스트 조합 응답"""
+
+def create_kakao_comparison_response(keyword, analysis):
+    """비교 분석 - 막대그래프 + 텍스트"""
     
     if not analysis:
         return create_kakao_response("[검색량 비교] 조회 실패\n\n검색광고 API 오류")
     
-    # 차트 URL 생성
-    chart_url = create_quickchart_url(analysis)
+    chart_url = create_comparison_chart_url(analysis)
     
-    # 차트 생성 실패 시 텍스트로 폴백
     if not chart_url:
-        return create_kakao_response(format_comparison_analysis(analysis))
+        return create_kakao_response(format_comparison_text(analysis))
     
-    # 요약 텍스트
     vol_2025 = analysis["volume_2025"]
     vol_2024 = analysis.get("volume_2024")
     change_rate = analysis["change_rate"]
@@ -1105,7 +1372,6 @@ def create_kakao_chart_response(keyword, analysis):
     
     summary += f"\n✅ 모바일 {mobile_ratio:.0f}% - 최적화 필수"
     
-    # 카카오 응답 (이미지 + 텍스트)
     return jsonify({
         "version": "2.0",
         "template": {
@@ -1125,11 +1391,149 @@ def create_kakao_chart_response(keyword, analysis):
         }
     })
 
-def format_comparison_analysis(analysis):
-    """비교 분석 포맷팅 - 2024년 먼저 표시 (텍스트 전용)"""
+def create_kakao_ad_response(keyword, ad_data):
+    """광고 단가 - 막대그래프 + 텍스트"""
+    
+    if not ad_data:
+        return create_kakao_response(get_ad_cost(keyword))
+    
+    chart_url = create_ad_chart_url(ad_data)
+    
+    if not chart_url:
+        return create_kakao_response(get_ad_cost(keyword))
+    
+    efficient_bid = ad_data["efficient_bid"]
+    efficient_clicks = ad_data["efficient_clicks"]
+    efficient_cost = ad_data["efficient_cost"]
+    comp_idx = ad_data["comp_idx"]
+    
+    comp_emoji = "🔴" if comp_idx == "높음" else "🟡" if comp_idx == "중간" else "🟢"
+    
+    cpc = int(efficient_cost / efficient_clicks) if efficient_clicks > 0 else 0
+    daily_budget = max(efficient_cost / 30, 10000)
+    
+    summary = f"""💰 {keyword} 광고 분석
+
+━━━━━━━━━━━━━━━━━━━━━
+📊 키워드 정보
+━━━━━━━━━━━━━━━━━━━━━
+
+경쟁도: {comp_idx} {comp_emoji}
+월간 검색량: {format_number(ad_data['total_qc'])}회
+
+━━━━━━━━━━━━━━━━━━━━━
+🎯 추천 입찰가
+━━━━━━━━━━━━━━━━━━━━━
+
+✅ 추천: {format_number(efficient_bid)}원
+├ 예상 클릭: 월 {efficient_clicks}회
+├ 예상 비용: 월 {format_won(efficient_cost)}
+├ 클릭당 비용: 약 {format_number(cpc)}원
+└ 일 예산: 약 {format_won(daily_budget)}
+
+━━━━━━━━━━━━━━━━━━━━━
+📋 운영 가이드
+━━━━━━━━━━━━━━━━━━━━━
+
+• 1주일 후 CTR 확인 (1.5% 목표)
+• 전환 발생 시 예산 증액 검토
+• 품질점수 관리로 CPC 절감"""
+    
+    return jsonify({
+        "version": "2.0",
+        "template": {
+            "outputs": [
+                {
+                    "simpleImage": {
+                        "imageUrl": chart_url,
+                        "altText": f"{keyword} 입찰가별 성과 그래프"
+                    }
+                },
+                {
+                    "simpleText": {
+                        "text": summary
+                    }
+                }
+            ]
+        }
+    })
+
+def create_kakao_region_response(region_keyword, region_data):
+    """지역 분석 - 차트 2개 + 텍스트"""
+    
+    if not region_data["success"]:
+        return create_kakao_response(format_region_text(region_keyword))
+    
+    charts = create_region_charts_url(region_data)
+    
+    if not charts:
+        return create_kakao_response(format_region_text(region_keyword))
+    
+    pop_data = get_population_data(region_data)
+    daily_avg = pop_data["daily_avg"]
+    
+    # 주 타겟 연령대
+    age_data = pop_data["by_age"]
+    main_age = max(age_data, key=age_data.get)
+    main_age_ratio = age_data[main_age]
+    
+    # 피크 시간
+    time_data = pop_data["by_time"]
+    peak_time = "18-19시" if time_data["1819"] == max(time_data.values()) else "12-13시"
+    
+    summary = f"""[지역분석] {region_data['fullName']}
+
+━━━━━━━━━━━━━━━━━━━━━
+👥 유동인구
+━━━━━━━━━━━━━━━━━━━━━
+
+일평균: {format_number(daily_avg)}명
+
+주 타겟: {main_age.replace('s', '대')} ({main_age_ratio}%) ⭐
+피크 시간: {peak_time} 🔥
+
+━━━━━━━━━━━━━━━━━━━━━
+💡 입지 인사이트
+━━━━━━━━━━━━━━━━━━━━━
+
+✅ {main_age.replace('s', '대')} 중심 상권
+✅ {peak_time} 집중 마케팅
+✅ 모바일 최적화 필수"""
+    
+    return jsonify({
+        "version": "2.0",
+        "template": {
+            "outputs": [
+                {
+                    "simpleImage": {
+                        "imageUrl": charts["pie_chart"],
+                        "altText": "연령대 비율"
+                    }
+                },
+                {
+                    "simpleImage": {
+                        "imageUrl": charts["bar_chart"],
+                        "altText": "시간대별 유동인구"
+                    }
+                },
+                {
+                    "simpleText": {
+                        "text": summary
+                    }
+                }
+            ]
+        }
+    })
+
+#############################################
+# 텍스트 전용 포맷 함수들 (폴백용)
+#############################################
+
+def format_comparison_text(analysis):
+    """비교 분석 텍스트 (차트 실패 시)"""
     
     if not analysis:
-        return "[검색량 비교] 조회 실패\n\n검색광고 API 오류"
+        return "[검색량 비교] 조회 실패"
     
     keyword = analysis["keyword"]
     vol_2025 = analysis["volume_2025"]
@@ -1137,7 +1541,6 @@ def format_comparison_analysis(analysis):
     change_rate = analysis["change_rate"]
     mobile_ratio = analysis["mobile_ratio"]
     
-    # 모바일/PC 분할
     mobile_2025 = int(vol_2025 * mobile_ratio / 100)
     pc_2025 = vol_2025 - mobile_2025
     
@@ -1148,7 +1551,6 @@ def format_comparison_analysis(analysis):
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
-    # 2024년 먼저 표시
     if vol_2024:
         mobile_2024 = int(vol_2024 * mobile_ratio / 100)
         pc_2024 = vol_2024 - mobile_2024
@@ -1158,7 +1560,6 @@ def format_comparison_analysis(analysis):
         lines.append(f"└─ PC: {format_number(pc_2024)}회 ({100-mobile_ratio:.0f}%)")
         lines.append("")
     
-    # 2025년 나중 표시
     lines.append(f"2025년: {format_number(vol_2025)}회")
     lines.append(f"├─ 모바일: {format_number(mobile_2025)}회 ({mobile_ratio:.0f}%)")
     lines.append(f"└─ PC: {format_number(pc_2025)}회 ({100-mobile_ratio:.0f}%)")
@@ -1175,48 +1576,8 @@ def format_comparison_analysis(analysis):
         sign = "+" if change_rate > 0 else ""
         
         lines.append(f"전년 대비: {sign}{format_number(diff)}회 ({sign}{change_rate:.1f}%) {emoji}")
-    else:
-        lines.append("전년 데이터 없음")
     
     lines.append("")
-    
-    # 월별 추이
-    if analysis.get("datalab_available") and analysis["monthly_2025"]:
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("📉 월별 추이 (최근 6개월)")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("")
-        
-        # 2024년 먼저
-        lines.append("2024년")
-        for item in analysis["monthly_2024"]:
-            period = item["period"]
-            ratio = item["ratio"]
-            
-            month = period.split("-")[1]
-            value = int(ratio * 100)
-            bar_length = int(ratio / 10)
-            bar = "█" * bar_length
-            
-            lines.append(f"├─ {month}월: {value:>6,} {bar}")
-        
-        lines.append("")
-        
-        # 2025년 나중
-        lines.append("2025년")
-        for item in analysis["monthly_2025"]:
-            period = item["period"]
-            ratio = item["ratio"]
-            
-            month = period.split("-")[1]
-            value = int(ratio * 100)
-            bar_length = int(ratio / 10)
-            bar = "█" * bar_length
-            
-            lines.append(f"├─ {month}월: {value:>6,} {bar}")
-        
-        lines.append("")
-    
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("💡 인사이트")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
@@ -1238,6 +1599,44 @@ def format_comparison_analysis(analysis):
         lines.append("→ SNS 바이럴 필요")
     
     lines.append(f"✅ 모바일 비중 {mobile_ratio:.0f}% - 최적화 필수")
+    
+    return "\n".join(lines)
+
+def format_region_text(region_keyword):
+    """지역 분석 텍스트 (차트 실패 시)"""
+    
+    region_data = search_kakao_region(region_keyword)
+    
+    if not region_data["success"]:
+        return f"[지역분석] 오류\n\n'{region_keyword}' 지역을 찾을 수 없습니다."
+    
+    pop_data = get_population_data(region_data)
+    
+    lines = [f"[지역분석] {region_data['fullName']}", ""]
+    
+    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("👥 유동인구")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("")
+    
+    daily_avg = pop_data["daily_avg"]
+    lines.append(f"일평균: {format_number(daily_avg)}명")
+    lines.append("")
+    
+    lines.append("연령대:")
+    age_data = pop_data["by_age"]
+    for age, ratio in age_data.items():
+        count = int(daily_avg * ratio / 100)
+        star = " ⭐" if ratio >= 25 else ""
+        lines.append(f"├─ {age.replace('s', '대')}: {ratio}% ({format_number(count)}명){star}")
+    
+    lines.append("")
+    lines.append("시간대별:")
+    time_data = pop_data["by_time"]
+    lines.append(f"├─ 07-09시: {format_number(time_data['0709'])}명")
+    lines.append(f"├─ 12-13시: {format_number(time_data['1213'])}명 🔥")
+    lines.append(f"├─ 18-19시: {format_number(time_data['1819'])}명 🔥")
+    lines.append(f"└─ 20-22시: {format_number(time_data['2022'])}명")
     
     return "\n".join(lines)
 
@@ -1359,7 +1758,7 @@ def kakao_address_search(region_keyword):
         return {"success": False, "error": str(e)}
 
 #############################################
-# 지역 분석
+# 지역/매출 분석
 #############################################
 def get_population_data(region_data):
     """유동인구 데이터"""
@@ -1408,110 +1807,6 @@ def get_population_data(region_data):
         }
     }
 
-def format_region_analysis(region_keyword):
-    """지역 분석 포맷팅"""
-    
-    region_data = search_kakao_region(region_keyword)
-    
-    if not region_data["success"]:
-        return f"[지역분석] 오류\n\n'{region_keyword}' 지역을 찾을 수 없습니다.\n\n예) 지역 홍대\n예) 지역 부평동\n예) 지역 강남역"
-    
-    pop_data = get_population_data(region_data)
-    
-    lines = [f"[지역분석] {region_data['fullName']}", ""]
-    
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("👥 유동인구")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    daily_avg = pop_data["daily_avg"]
-    lines.append(f"일평균: {format_number(daily_avg)}명")
-    lines.append("")
-    
-    lines.append("연령대:")
-    age_data = pop_data["by_age"]
-    for age, ratio in age_data.items():
-        count = int(daily_avg * ratio / 100)
-        star = " ⭐" if ratio >= 25 else ""
-        lines.append(f"├─ {age.replace('s', '대')}: {ratio}% ({format_number(count)}명){star}")
-    
-    lines.append("")
-    lines.append("성별:")
-    gender = pop_data["by_gender"]
-    lines.append(f"├─ 여성: {gender['female']}%")
-    lines.append(f"└─ 남성: {gender['male']}%")
-    
-    lines.append("")
-    lines.append("시간대별:")
-    time_data = pop_data["by_time"]
-    lines.append(f"├─ 07-09시: {format_number(time_data['0709'])}명")
-    lines.append(f"├─ 12-13시: {format_number(time_data['1213'])}명 🔥")
-    lines.append(f"├─ 18-19시: {format_number(time_data['1819'])}명 🔥")
-    lines.append(f"└─ 20-22시: {format_number(time_data['2022'])}명")
-    
-    lines.append("")
-    lines.append("평일/주말:")
-    weekday = pop_data["weekday_vs_weekend"]
-    diff = int((weekday['weekend'] - weekday['weekday']) / weekday['weekday'] * 100)
-    lines.append(f"├─ 평일: {format_number(weekday['weekday'])}명")
-    lines.append(f"└─ 주말: {format_number(weekday['weekend'])}명 ({diff:+d}%)")
-    
-    lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("📍 입지 특성")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    dong_name = region_data.get("dongNm", "")
-    
-    if "역삼" in dong_name or "강남" in dong_name:
-        facilities = ["오피스 밀집", "대기업 본사"]
-        strength = ["고소득층", "직장인 밀집"]
-        weakness = ["높은 임대료", "치열한 경쟁"]
-    elif "홍대" in dong_name or "동교" in dong_name:
-        facilities = ["대학가", "클럽/공연장"]
-        strength = ["젊은층", "유동인구 많음"]
-        weakness = ["주말 집중", "소음"]
-    elif "부평" in dong_name or "삼산" in dong_name:
-        facilities = ["역세권", "주거 복합"]
-        strength = ["안정적 수요", "평일 강세"]
-        weakness = ["주말 약세", "주차 부족"]
-    else:
-        facilities = ["데이터 수집 중"]
-        strength = ["분석 중"]
-        weakness = ["분석 중"]
-    
-    lines.append("주요 시설:")
-    for fac in facilities:
-        lines.append(f"• {fac}")
-    
-    lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("💡 입지 인사이트")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    lines.append("✅ 강점")
-    for s in strength:
-        lines.append(f"• {s}")
-    
-    lines.append("")
-    lines.append("⚠️ 약점")
-    for w in weakness:
-        lines.append(f"• {w}")
-    
-    lines.append("")
-    lines.append("🎯 업종 적합도")
-    lines.append("음식점: ⭐⭐⭐⭐⭐")
-    lines.append("카페: ⭐⭐⭐⭐")
-    lines.append("소매: ⭐⭐⭐")
-    
-    return "\n".join(lines)
-
-#############################################
-# 매출 분석
-#############################################
 def get_business_data(region_data, industry_keyword):
     """상가업소 데이터"""
     import random
@@ -1565,7 +1860,7 @@ def get_sales_data(region_data, industry_keyword):
     }
 
 def format_sales_analysis(region_input):
-    """매출 분석 - 시/구 구분"""
+    """매출 분석 - 텍스트만"""
     
     parts = region_input.split()
     
@@ -1577,9 +1872,7 @@ def format_sales_analysis(region_input):
 예시:
 • 매출 인천 부평동 음식점
 • 매출 부산 서면동 카페
-• 매출 서울 강남구 한식
-
-※ 동일 지명 구분을 위해 시/도 필수"""
+• 매출 서울 강남구 한식"""
     
     city = parts[0]
     dong = parts[1]
@@ -1589,24 +1882,11 @@ def format_sales_analysis(region_input):
     region_data = search_kakao_region(full_region)
     
     if not region_data["success"]:
-        return f"""[매출분석] 오류
-
-'{full_region}' 지역을 찾을 수 없습니다.
-
-예시:
-• 매출 인천 부평동 음식점
-• 매출 부산 부전동 카페"""
+        return f"[매출분석] 오류\n\n'{full_region}' 지역을 찾을 수 없습니다."
     
     if industry_keyword not in INDUSTRY_CODES:
         available = ", ".join(list(INDUSTRY_CODES.keys())[:10])
-        return f"""[매출분석] 오류
-
-'{industry_keyword}' 업종 없음
-
-가능한 업종:
-{available}
-
-예) 매출 {city} {dong} 음식점"""
+        return f"[매출분석] 오류\n\n'{industry_keyword}' 업종 없음\n\n가능: {available}"
     
     business_data = get_business_data(region_data, industry_keyword)
     sales_data = get_sales_data(region_data, industry_keyword)
@@ -1632,18 +1912,12 @@ def format_sales_analysis(region_input):
     
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"🏪 업소 현황")
+    lines.append("🏪 업소 현황")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     
     total = business_data["total"]
     lines.append(f"총 {industry_keyword}: {total}개")
-    
-    if business_data["by_type"]:
-        lines.append("")
-        for name, count in business_data["by_type"].items():
-            ratio = (count / total) * 100
-            lines.append(f"├─ {name}: {count}개 ({ratio:.1f}%)")
     
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
@@ -1710,41 +1984,36 @@ def get_help():
 📊 기본 기능
 ━━━━━━━━━━━━━━━━━━━━━
 
-▶ 키워드 검색량 (최대 5개)
+▶ 키워드 검색량
 예) 부평맛집
-예) 부평맛집,강남맛집,송도카페
+예) 부평맛집,강남맛집
 
 ▶ 연관 검색어
 예) 연관 부평맛집
 
-▶ 자동완성어 (네이버)
+▶ 자동완성어
 예) 자동 부평맛집
-
-▶ 자동완성어 (유튜브)
 예) 유튜브 부평맛집
-
-▶ 광고 단가 분석
-예) 광고 부평맛집
 
 ▶ 대표 키워드
 예) 대표 1234567890
 
 ━━━━━━━━━━━━━━━━━━━━━
-🆕 상권 분석 (전국 지원)
+📈 상권 분석 (그래프)
 ━━━━━━━━━━━━━━━━━━━━━
 
-▶ 검색량 전년 비교 (차트)
+▶ 검색량 비교 (막대)
 예) 비교 부평맛집
 
-▶ 지역 유동인구
+▶ 광고 단가 (막대)
+예) 광고 부평맛집
+
+▶ 지역 분석 (파이+막대)
 예) 지역 홍대
 예) 지역 부평동
-예) 지역 강남역
 
-▶ 업종별 매출
+▶ 매출 분석 (텍스트)
 예) 매출 인천 부평동 음식점
-예) 매출 부산 서면동 카페
-예) 매출 서울 강남구 한식
 
 ━━━━━━━━━━━━━━━━━━━━━
 🎲 재미 기능
@@ -1790,20 +2059,32 @@ def kakao_skill():
         if lower_input in ["로또", "로또번호"]:
             return create_kakao_response(get_lotto())
         
-        # ✅ 비교 기능 - 차트 응답으로 변경
+        # ✅ 비교 - 막대그래프
         if lower_input.startswith("비교 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
                 analysis = get_comparison_analysis(keyword)
-                return create_kakao_chart_response(keyword, analysis)
+                return create_kakao_comparison_response(keyword, analysis)
             return create_kakao_response("예) 비교 부평맛집")
         
+        # ✅ 광고 - 막대그래프
+        if lower_input.startswith("광고 "):
+            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            keyword = clean_keyword(keyword)
+            if keyword:
+                ad_data = get_ad_cost_data(keyword)
+                return create_kakao_ad_response(keyword, ad_data)
+            return create_kakao_response("예) 광고 부평맛집")
+        
+        # ✅ 지역 - 파이+막대그래프
         if lower_input.startswith("지역 "):
             region = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if region:
-                return create_kakao_response(format_region_analysis(region))
+                region_data = search_kakao_region(region)
+                return create_kakao_region_response(region, region_data)
             return create_kakao_response("예) 지역 부평동")
         
+        # ✅ 매출 - 텍스트만
         if lower_input.startswith("매출 "):
             input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if input_text:
@@ -1835,13 +2116,7 @@ def kakao_skill():
                 return create_kakao_response(get_related_keywords(keyword))
             return create_kakao_response("예) 연관 부평맛집")
         
-        if lower_input.startswith("광고 "):
-            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
-            keyword = clean_keyword(keyword)
-            if keyword:
-                return create_kakao_response(get_ad_cost(keyword))
-            return create_kakao_response("예) 광고 부평맛집")
-        
+        # 기본: 검색량
         keyword = user_utterance.strip()
         if "," in keyword:
             return create_kakao_response(get_search_volume(keyword))
@@ -1850,7 +2125,7 @@ def kakao_skill():
         
     except Exception as e:
         logger.error(f"스킬 오류: {str(e)}")
-        return create_kakao_response(f"오류 발생\n잠시 후 다시 시도해주세요.")
+        return create_kakao_response("오류 발생\n잠시 후 다시 시도해주세요.")
 
 def create_kakao_response(text):
     if len(text) > 1000:
@@ -1867,162 +2142,58 @@ def create_kakao_response(text):
 #############################################
 @app.route('/')
 def home():
-    return "서버 정상 작동 중"
+    return "서버 정상 작동 중 ✅"
 
-@app.route('/test/compare')
-def test_compare():
-    keyword = request.args.get('q', '부평맛집')
-    
-    result_2025 = get_datalab_trend(keyword, "2025-01-01", "2025-11-30")
-    result_2024 = get_datalab_trend(keyword, "2024-01-01", "2024-11-30")
-    
-    analysis = get_comparison_analysis(keyword)
-    
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>비교 테스트</title></head>
-<body>
-<h2>DataLab API 테스트: {keyword}</h2>
-
-<h3>2025년 API 응답</h3>
-<pre style="background:#e8f5e9; padding:15px;">{json.dumps(result_2025, indent=2, ensure_ascii=False)}</pre>
-
-<h3>2024년 API 응답</h3>
-<pre style="background:#fff3e0; padding:15px;">{json.dumps(result_2024, indent=2, ensure_ascii=False)}</pre>
-
-<hr>
-
-<h3>최종 출력 (글자: {len(format_comparison_analysis(analysis)) if analysis else 0}자)</h3>
-<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{format_comparison_analysis(analysis) if analysis else '조회 실패'}</pre>
-</body></html>"""
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
-# ✅ 차트 테스트 라우트 (신규 추가)
 @app.route('/test/chart')
 def test_chart():
     keyword = request.args.get('q', '부평맛집')
+    chart_type = request.args.get('type', 'compare')
     
-    # 분석 실행
-    analysis = get_comparison_analysis(keyword)
+    if chart_type == 'compare':
+        analysis = get_comparison_analysis(keyword)
+        if analysis:
+            chart_url = create_comparison_chart_url(analysis)
+            title = "검색량 비교 (막대그래프)"
+        else:
+            return "분석 실패", 500
     
-    if not analysis:
-        return "분석 실패", 500
+    elif chart_type == 'ad':
+        ad_data = get_ad_cost_data(keyword)
+        if ad_data:
+            chart_url = create_ad_chart_url(ad_data)
+            title = "광고 단가 (막대그래프)"
+        else:
+            return "분석 실패", 500
     
-    # 차트 URL 생성
-    chart_url = create_quickchart_url(analysis)
-    
-    # HTML로 미리보기
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>차트 테스트: {keyword}</title>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            max-width: 900px;
-            margin: 50px auto;
-            padding: 20px;
-        }}
-        h2 {{
-            color: #333;
-        }}
-        .chart {{
-            margin: 30px 0;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            overflow: hidden;
-        }}
-        .info {{
-            background: #f5f5f5;
-            padding: 15px;
-            border-radius: 5px;
-            margin-top: 20px;
-        }}
-        .url {{
-            word-break: break-all;
-            background: #fff;
-            padding: 10px;
-            border: 1px solid #ddd;
-            margin-top: 10px;
-            font-size: 12px;
-        }}
-    </style>
-</head>
-<body>
-    <h2>📊 검색량 비교 차트 테스트</h2>
-    <p><strong>키워드:</strong> {keyword}</p>
-    
-    <div class="chart">
-        <img src="{chart_url}" alt="검색량 비교 차트" style="width:100%">
-    </div>
-    
-    <div class="info">
-        <h3>📋 분석 데이터</h3>
-        <pre>{json.dumps(analysis, indent=2, ensure_ascii=False)}</pre>
-    </div>
-    
-    <div class="info">
-        <h3>🔗 차트 URL</h3>
-        <div class="url">{chart_url}</div>
-        <p><small>URL 길이: {len(chart_url)}자</small></p>
-    </div>
-    
-    <div class="info">
-        <h3>📱 카카오톡 미리보기</h3>
-        <p>이미지 + 텍스트 조합으로 표시됩니다.</p>
-        <ul>
-            <li>2024년: {format_number(analysis['volume_2024'])}회</li>
-            <li>2025년: {format_number(analysis['volume_2025'])}회</li>
-            <li>증감률: {analysis['change_rate']:.1f}%</li>
-        </ul>
-    </div>
-</body>
-</html>"""
-    
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
-@app.route('/test/region')
-def test_region():
-    region = request.args.get('r', '홍대')
-    result = format_region_analysis(region)
-    
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>지역 테스트</title></head>
-<body>
-<h2>{region}</h2>
-<h3>글자: {len(result)}자</h3>
-<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
+    elif chart_type == 'region':
+        region_data = search_kakao_region(keyword)
+        if region_data["success"]:
+            charts = create_region_charts_url(region_data)
+            if charts:
+                html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>지역 분석</title></head>
+<body style="font-family:Arial; max-width:900px; margin:50px auto; padding:20px;">
+<h2>📊 지역 분석: {keyword}</h2>
+<h3>연령대 파이 차트</h3>
+<img src="{charts['pie_chart']}" style="width:100%; max-width:500px;">
+<h3>시간대 막대 차트</h3>
+<img src="{charts['bar_chart']}" style="width:100%; max-width:700px;">
 </body></html>"""
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
-@app.route('/test/sales')
-def test_sales():
-    city = request.args.get('c', '인천')
-    dong = request.args.get('d', '부평동')
-    industry = request.args.get('i', '음식점')
+                return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+        return "지역 조회 실패", 500
     
-    result = format_sales_analysis(f"{city} {dong} {industry}")
+    else:
+        return "잘못된 타입", 400
     
     html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>매출 테스트</title></head>
-<body>
-<h2>{city} {dong} {industry}</h2>
-<h3>글자: {len(result)}자</h3>
-<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{result}</pre>
+<html><head><meta charset="UTF-8"><title>{title}</title></head>
+<body style="font-family:Arial; max-width:900px; margin:50px auto; padding:20px;">
+<h2>📊 {title}</h2>
+<p><strong>키워드:</strong> {keyword}</p>
+<img src="{chart_url}" style="width:100%; border:1px solid #ddd; border-radius:8px;">
+<p><small>URL 길이: {len(chart_url)}자</small></p>
 </body></html>"""
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
-@app.route('/test/kakao')
-def test_kakao():
-    region = request.args.get('r', '홍대')
-    result = search_kakao_region(region)
     
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Kakao API 테스트</title></head>
-<body>
-<h2>Kakao 지역 검색: {region}</h2>
-<pre style="background:#f5f5f5; padding:20px;">{json.dumps(result, indent=2, ensure_ascii=False)}</pre>
-</body></html>"""
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 #############################################
@@ -2034,13 +2205,6 @@ if __name__ == '__main__':
     print(f"DataLab API: {'✅' if NAVER_CLIENT_ID else '❌'}")
     print(f"Kakao API: {'✅' if KAKAO_REST_API_KEY else '❌'}")
     print(f"Gemini API: {'✅' if GEMINI_API_KEY else '❌'}")
-    print(f"공공데이터 API: {'✅' if DATA_GO_KR_API_KEY else '❌'}")
-    
-    if validate_required_keys():
-        print("✅ 필수 키 확인 완료")
-    else:
-        print("⚠️ 일부 기능 제한")
-    
     print("====================")
     
     port = int(os.environ.get('PORT', 5000))
