@@ -28,7 +28,6 @@ NAVER_CLIENT_ID = os.environ.get('NAVER_CLIENT_ID', '')
 NAVER_CLIENT_SECRET = os.environ.get('NAVER_CLIENT_SECRET', '')
 KAKAO_REST_API_KEY = os.environ.get('KAKAO_REST_API_KEY', '')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-DATA_GO_KR_API_KEY = os.environ.get('DATA_GO_KR_API_KEY', '')
 
 #############################################
 # 환경변수 검증
@@ -78,88 +77,6 @@ def format_won(value):
 
 def clean_keyword(keyword):
     return keyword.replace(" ", "")
-
-#############################################
-# 업종 코드 매핑 (소상공인 API 기반)
-#############################################
-INDUSTRY_CODES = {}
-
-def load_industry_codes():
-    """소상공인 API에서 업종 코드 로드"""
-    global INDUSTRY_CODES
-    
-    try:
-        # 대분류 로드
-        large_url = f"https://apis.data.go.kr/B553077/api/open/sdsc2/storeZoneIndsLclasInfoService"
-        params = {
-            "serviceKey": DATA_GO_KR_API_KEY,
-            "pageNo": "1",
-            "numOfRows": "100",
-            "type": "json"
-        }
-        
-        response = requests.get(large_url, params=params, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            body = data.get("body", {})
-            items = body.get("items", [])
-            
-            for item in items:
-                code = item.get("indsLclsCd", "")
-                name = item.get("indsLclsNm", "")
-                if code and name:
-                    INDUSTRY_CODES[name] = {"code": code, "name": name, "level": "large"}
-            
-            logger.info(f"✅ 업종 대분류 {len(items)}개 로드")
-        
-        # 중분류 로드
-        middle_url = f"https://apis.data.go.kr/B553077/api/open/sdsc2/storeZoneIndsMclasInfoService"
-        response = requests.get(middle_url, params=params, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            body = data.get("body", {})
-            items = body.get("items", [])
-            
-            for item in items:
-                code = item.get("indsMclsCd", "")
-                name = item.get("indsMclsNm", "")
-                if code and name:
-                    INDUSTRY_CODES[name] = {"code": code, "name": name, "level": "middle"}
-            
-            logger.info(f"✅ 업종 중분류 {len(items)}개 로드")
-        
-        # 소분류 로드
-        small_url = f"https://apis.data.go.kr/B553077/api/open/sdsc2/storeZoneIndsSclasInfoService"
-        response = requests.get(small_url, params=params, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            body = data.get("body", {})
-            items = body.get("items", [])
-            
-            for item in items:
-                code = item.get("indsSclsCd", "")
-                name = item.get("indsSclsNm", "")
-                if code and name:
-                    INDUSTRY_CODES[name] = {"code": code, "name": name, "level": "small"}
-            
-            logger.info(f"✅ 업종 소분류 {len(items)}개 로드")
-        
-    except Exception as e:
-        logger.error(f"업종 코드 로드 실패: {str(e)}")
-        # 폴백: 기본 업종 코드
-        INDUSTRY_CODES.update({
-            "음식점": {"code": "Q", "name": "음식점업", "level": "large"},
-            "한식": {"code": "Q12", "name": "한식음식점", "level": "middle"},
-            "중식": {"code": "Q13", "name": "중식음식점", "level": "middle"},
-            "일식": {"code": "Q14", "name": "일식음식점", "level": "middle"},
-            "카페": {"code": "Q21", "name": "커피/음료", "level": "middle"},
-            "병원": {"code": "G", "name": "의료업", "level": "large"},
-            "학원": {"code": "R", "name": "학원", "level": "large"},
-            "편의점": {"code": "D01", "name": "편의점", "level": "middle"},
-        })
 
 #############################################
 # 네이버 검색광고 API
@@ -350,10 +267,10 @@ def get_related_keywords_api(keyword):
     return response.strip()
 
 #############################################
-# 기본 기능: 광고 단가 (텍스트만)
+# 기본 기능: 광고 단가
 #############################################
 def get_ad_cost(keyword):
-    """광고 단가 분석 - 텍스트만"""
+    """광고 단가 분석"""
     result = get_keyword_data(keyword)
     if not result["success"]:
         return f"조회 실패: {result['error']}"
@@ -1083,376 +1000,6 @@ def create_comparison_chart_url(analysis):
         return None
 
 #############################################
-# 소상공인 API
-#############################################
-def get_store_count_by_region(adm_cd, industry_code=None):
-    """행정동별 상가업소 수 조회"""
-    
-    if not DATA_GO_KR_API_KEY:
-        logger.warning("⚠️ 소상공인 API 키 미설정")
-        return {"success": False, "error": "API 키 미설정"}
-    
-    try:
-        url = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeListInDong"
-        params = {
-            "serviceKey": DATA_GO_KR_API_KEY,
-            "key": adm_cd,
-            "pageNo": "1",
-            "numOfRows": "1000",
-            "type": "json"
-        }
-        
-        # ✅ 디버깅 로그 추가
-        logger.info(f"🔍 요청 URL: {url}")
-        logger.info(f"🔍 행정동 코드: {adm_cd}")
-        logger.info(f"🔍 파라미터: {params}")
-        
-        response = requests.get(url, params=params, timeout=5)
-        
-        # ✅ 응답 상세 로그
-        logger.info(f"📥 상태코드: {response.status_code}")
-        logger.info(f"📥 응답 내용: {response.text[:500]}")  # 처음 500자만
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            # ✅ JSON 구조 확인
-            logger.info(f"📋 JSON 키: {list(data.keys())}")
-            
-            body = data.get("body", {})
-            items = body.get("items", [])
-            total_count = body.get("totalCount", 0)
-            
-            logger.info(f"✅ 상가업소 {total_count}개 조회")
-            
-            return {
-                "success": True,
-                "total_count": total_count,
-                "stores": items
-            }
-        
-        logger.error(f"❌ 상가업소 조회 실패: {response.status_code}")
-        return {"success": False, "error": f"상태코드 {response.status_code}"}
-        
-    except Exception as e:
-        logger.error(f"❌ 상가업소 조회 오류: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-def get_store_changes_by_date(start_date, end_date, adm_cd=None):
-    """기간별 개폐업 조회"""
-    
-    if not DATA_GO_KR_API_KEY:
-        return {"success": False, "error": "API 키 미설정"}
-    
-    try:
-        url = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeListInUpjong"
-        params = {
-            "serviceKey": DATA_GO_KR_API_KEY,
-            "key": start_date,
-            "pageNo": "1",
-            "numOfRows": "1000",
-            "type": "json"
-        }
-        
-        response = requests.get(url, params=params, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            body = data.get("body", {})
-            items = body.get("items", [])
-            
-            opened = sum(1 for item in items if item.get("trdStateGbn") == "01")
-            closed = sum(1 for item in items if item.get("trdStateGbn") == "03")
-            
-            return {
-                "success": True,
-                "opened": opened,
-                "closed": closed,
-                "closure_rate": (closed / len(items) * 100) if items else 0
-            }
-        
-        return {"success": False, "error": f"상태코드 {response.status_code}"}
-        
-    except Exception as e:
-        logger.error(f"❌ 개폐업 조회 오류: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-def get_trade_area_info(region_data):
-    """상권 정보 조회"""
-    
-    if not DATA_GO_KR_API_KEY:
-        return {"success": False, "error": "API 키 미설정"}
-    
-    try:
-        adm_cd = region_data.get("admCd", "")
-        
-        url = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeZoneInAdmi"
-        params = {
-            "serviceKey": DATA_GO_KR_API_KEY,
-            "key": adm_cd,
-            "pageNo": "1",
-            "numOfRows": "100",
-            "type": "json"
-        }
-        
-        response = requests.get(url, params=params, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            body = data.get("body", {})
-            items = body.get("items", [])
-            
-            if items:
-                trade_areas = []
-                for item in items:
-                    trade_areas.append({
-                        "name": item.get("mainTrarNm", ""),
-                        "code": item.get("trarNo", ""),
-                        "type": item.get("trarArea", "")
-                    })
-                
-                return {
-                    "success": True,
-                    "trade_areas": trade_areas
-                }
-        
-        return {"success": False, "error": "상권 정보 없음"}
-        
-    except Exception as e:
-        logger.error(f"❌ 상권 정보 조회 오류: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-#############################################
-# Kakao API
-#############################################
-def search_kakao_region(region_keyword):
-    """Kakao Local API로 지역 검색"""
-    
-    if not KAKAO_REST_API_KEY:
-        return {"success": False, "error": "Kakao API 키 미설정"}
-    
-    headers = {"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"}
-    
-    try:
-        url = "https://dapi.kakao.com/v2/local/search/keyword.json"
-        params = {"query": region_keyword, "size": 1}
-        
-        response = requests.get(url, headers=headers, params=params, timeout=3)
-        
-        if response.status_code == 200:
-            data = response.json()
-            documents = data.get("documents", [])
-            
-            if documents:
-                doc = documents[0]
-                x = doc.get("x")
-                y = doc.get("y")
-                
-                return kakao_coord_to_region(x, y)
-        
-        return kakao_address_search(region_keyword)
-        
-    except Exception as e:
-        logger.error(f"Kakao Local 검색 오류: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-def kakao_coord_to_region(x, y):
-    """Kakao 좌표 → 행정구역 코드"""
-    
-    headers = {"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"}
-    
-    try:
-        url = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
-        params = {"x": x, "y": y}
-        
-        response = requests.get(url, headers=headers, params=params, timeout=3)
-        
-        if response.status_code == 200:
-            data = response.json()
-            documents = data.get("documents", [])
-            
-            for doc in documents:
-                if doc.get("region_type") == "H":
-                    code = doc.get("code")
-                    address_name = doc.get("address_name")
-                    parts = address_name.split()
-                    
-                    return {
-                        "success": True,
-                        "admCd": code,
-                        "sigunCd": code[:5],
-                        "sigunNm": parts[1] if len(parts) > 1 else "",
-                        "fullName": address_name,
-                        "dongNm": parts[2] if len(parts) > 2 else "",
-                        "x": x,
-                        "y": y
-                    }
-            
-            for doc in documents:
-                if doc.get("region_type") == "B":
-                    code = doc.get("code")
-                    address_name = doc.get("address_name")
-                    parts = address_name.split()
-                    
-                    return {
-                        "success": True,
-                        "admCd": code,
-                        "sigunCd": code[:5],
-                        "sigunNm": parts[1] if len(parts) > 1 else "",
-                        "fullName": address_name,
-                        "dongNm": parts[2] if len(parts) > 2 else "",
-                        "x": x,
-                        "y": y
-                    }
-        
-        return {"success": False, "error": "행정구역 코드 변환 실패"}
-        
-    except Exception as e:
-        logger.error(f"좌표 변환 오류: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-def kakao_address_search(region_keyword):
-    """Kakao 주소 검색"""
-    
-    headers = {"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"}
-    
-    try:
-        url = "https://dapi.kakao.com/v2/local/search/address.json"
-        params = {"query": region_keyword, "size": 1}
-        
-        response = requests.get(url, headers=headers, params=params, timeout=3)
-        
-        if response.status_code == 200:
-            data = response.json()
-            documents = data.get("documents", [])
-            
-            if documents:
-                doc = documents[0]
-                x = doc.get("x")
-                y = doc.get("y")
-                
-                return kakao_coord_to_region(x, y)
-        
-        return {"success": False, "error": "주소를 찾을 수 없습니다"}
-        
-    except Exception as e:
-        logger.error(f"주소 검색 오류: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-#############################################
-# 지역 분석
-#############################################
-def format_region_analysis(region_keyword):
-    """지역 분석 - 실제 데이터 기반"""
-    
-    region_data = search_kakao_region(region_keyword)
-    
-    if not region_data["success"]:
-        return f"[지역분석] 오류\n\n'{region_keyword}' 지역을 찾을 수 없습니다."
-    
-    full_name = region_data.get("fullName", "")
-    adm_cd = region_data.get("admCd", "")
-    
-    lines = [f"[지역분석] {full_name}", ""]
-    
-    # 상권 정보
-    trade_area = get_trade_area_info(region_data)
-    
-    if trade_area.get("success"):
-        areas = trade_area.get("trade_areas", [])
-        if areas:
-            lines.append("━━━━━━━━━━━━━━━━━━━━━")
-            lines.append("📍 상권 정보")
-            lines.append("━━━━━━━━━━━━━━━━━━━━━")
-            lines.append("")
-            for area in areas[:3]:
-                lines.append(f"• {area['name']}")
-            lines.append("")
-    
-    # 상가업소 현황
-    store_data = get_store_count_by_region(adm_cd)
-    
-    if store_data.get("success"):
-        total = store_data.get("total_count", 0)
-        
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("🏪 상가업소 현황")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("")
-        lines.append(f"총 업소 수: {format_number(total)}개")
-        lines.append("")
-        
-        # 업종별 분류 (상위 5개)
-        stores = store_data.get("stores", [])
-        industry_count = {}
-        
-        for store in stores:
-            industry = store.get("indsLclsNm", "기타")
-            industry_count[industry] = industry_count.get(industry, 0) + 1
-        
-        if industry_count:
-            sorted_industries = sorted(industry_count.items(), key=lambda x: x[1], reverse=True)
-            
-            lines.append("업종별 분포:")
-            for industry, count in sorted_industries[:5]:
-                ratio = (count / total * 100) if total > 0 else 0
-                lines.append(f"├─ {industry}: {count}개 ({ratio:.1f}%)")
-            lines.append("")
-    
-    # 개폐업 현황 (최근 1년)
-    today = date.today()
-    one_year_ago = today - timedelta(days=365)
-    start_date = one_year_ago.strftime("%Y%m%d")
-    
-    changes = get_store_changes_by_date(start_date, today.strftime("%Y%m%d"), adm_cd)
-    
-    if changes.get("success"):
-        opened = changes.get("opened", 0)
-        closed = changes.get("closed", 0)
-        closure_rate = changes.get("closure_rate", 0)
-        
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("📊 개폐업 현황 (최근 1년)")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("")
-        lines.append(f"신규: {opened}개")
-        lines.append(f"폐업: {closed}개")
-        lines.append(f"순증: {opened - closed:+d}개")
-        lines.append(f"폐업률: {closure_rate:.1f}%")
-        
-        if closure_rate >= 15:
-            lines.append("⚠️ 높은 폐업률 - 진입 신중 필요")
-        elif closure_rate <= 8:
-            lines.append("✅ 안정적인 상권")
-        
-        lines.append("")
-    
-    # 인사이트
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("💡 상권 인사이트")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    if store_data.get("success"):
-        total = store_data.get("total_count", 0)
-        if total >= 1000:
-            lines.append("✅ 대형 상권 - 높은 유동인구")
-        elif total >= 500:
-            lines.append("✅ 중형 상권 - 안정적 수요")
-        else:
-            lines.append("⚠️ 소형 상권 - 틈새시장 공략")
-    
-    if changes.get("success"):
-        opened = changes.get("opened", 0)
-        closed = changes.get("closed", 0)
-        if opened > closed * 1.5:
-            lines.append("📈 활발한 신규 진입 - 성장 상권")
-        elif closed > opened * 1.5:
-            lines.append("📉 폐업 증가 - 차별화 필수")
-    
-    return "\n".join(lines)
-
-#############################################
 # 텍스트 포맷 함수들
 #############################################
 
@@ -1610,7 +1157,6 @@ def create_kakao_comparison_response(keyword, analysis):
 def get_help():
     return """[사용 가이드]
 ━━━━━━━━━━━━━━━━━━━━━
-
 📊 기본 기능
 ━━━━━━━━━━━━━━━━━━━━━
 ▶ 키워드 검색량
@@ -1632,18 +1178,10 @@ def get_help():
 ▶ 대표 키워드
 예) 대표 1234567890
 예) 대표 플레이스URL
-━━━━━━━━━━━━━━━━━━━━━
 
-📈 상권 분석 (그래프)
-━━━━━━━━━━━━━━━━━━━━━
 ▶ 검색량 비교
 예) 비교 부평맛집
-
-▶ 지역 분석 (상가업소 기반)
-예) 지역 홍대
-예) 지역 부평동
 ━━━━━━━━━━━━━━━━━━━━━
-
 🎲 재미 기능
 ━━━━━━━━━━━━━━━━━━━━━
 ▶ 운세 & 로또
@@ -1697,13 +1235,6 @@ def kakao_skill():
             if keyword:
                 return create_kakao_response(get_ad_cost(keyword))
             return create_kakao_response("예) 광고 부평맛집")
-        
-        # 지역 - 상가업소 실제 데이터
-        if lower_input.startswith("지역 "):
-            region = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
-            if region:
-                return create_kakao_response(format_region_analysis(region))
-            return create_kakao_response("예) 지역 부평동")
         
         if lower_input.startswith("유튜브 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
@@ -1761,29 +1292,14 @@ def home():
 @app.route('/test/chart')
 def test_chart():
     keyword = request.args.get('q', '부평맛집')
-    chart_type = request.args.get('type', 'compare')
     
-    if chart_type == 'compare':
-        analysis = get_comparison_analysis(keyword)
-        if analysis:
-            chart_url = create_comparison_chart_url(analysis)
-            text = format_comparison_text(analysis)
-            title = "검색량 비교"
-        else:
-            return "분석 실패", 500
-    
-    elif chart_type == 'region':
-        text = format_region_analysis(keyword)
-        html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>지역 분석</title></head>
-<body style="font-family:Arial; max-width:900px; margin:50px auto; padding:20px;">
-<h2>📊 지역 분석: {keyword}</h2>
-<pre style="background:#f5f5f5; padding:20px; white-space:pre-wrap;">{text}</pre>
-</body></html>"""
-        return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
-    
+    analysis = get_comparison_analysis(keyword)
+    if analysis:
+        chart_url = create_comparison_chart_url(analysis)
+        text = format_comparison_text(analysis)
+        title = "검색량 비교"
     else:
-        return "잘못된 타입", 400
+        return "분석 실패", 500
     
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>{title}</title></head>
@@ -1805,13 +1321,7 @@ if __name__ == '__main__':
     print(f"DataLab API: {'✅' if NAVER_CLIENT_ID else '❌'}")
     print(f"Kakao API: {'✅' if KAKAO_REST_API_KEY else '❌'}")
     print(f"Gemini API: {'✅' if GEMINI_API_KEY else '❌'}")
-    print(f"소상공인 API: {'✅' if DATA_GO_KR_API_KEY else '❌'}")
     print("====================")
-    
-    # 서버 시작 시 업종 코드 로드
-    logger.info("🔄 업종 코드 로딩 중...")
-    load_industry_codes()
-    logger.info(f"✅ 총 {len(INDUSTRY_CODES)}개 업종 코드 로드 완료")
     
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
