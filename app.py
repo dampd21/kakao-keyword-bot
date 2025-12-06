@@ -1020,9 +1020,9 @@ def format_comparison_text(analysis):
     
     lines = [f"[검색량 비교] {keyword}", ""]
     
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━━━━━━━━━━━━")
     lines.append("📊 월간 검색량")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━━━━━━━━━━━━")
     lines.append("")
     
     if vol_2024:
@@ -1039,9 +1039,9 @@ def format_comparison_text(analysis):
     lines.append(f"└─ PC: {format_number(pc_2025)}회 ({100-mobile_ratio:.0f}%)")
     lines.append("")
     
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━━━━━━━━━━━━")
     lines.append("📈 증감 분석")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━━━━━━━━━━━━")
     lines.append("")
     
     if vol_2024:
@@ -1054,9 +1054,9 @@ def format_comparison_text(analysis):
     lines.append("")
     
     if analysis.get("datalab_available") and analysis["monthly_2025"]:
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("━━━━━━━━━━━━━━━")
         lines.append("📉 월별 추이 (최근 6개월)")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("━━━━━━━━━━━━━━━")
         lines.append("")
         
         lines.append("2024년")
@@ -1069,7 +1069,7 @@ def format_comparison_text(analysis):
             bar_length = int(ratio / 10)
             bar = "█" * bar_length
             
-            lines.append(f"├─ {month}월: {value:>6,} {bar}")
+            lines.append(f"- {month}월: {value:>6,} {bar}")
         
         lines.append("")
         
@@ -1083,13 +1083,13 @@ def format_comparison_text(analysis):
             bar_length = int(ratio / 10)
             bar = "█" * bar_length
             
-            lines.append(f"├─ {month}월: {value:>6,} {bar}")
+            lines.append(f"- {month}월: {value:>6,} {bar}")
         
         lines.append("")
     
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━━━━━━━━━━━━")
     lines.append("💡 인사이트")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━━━━━━━━━━━━")
     lines.append("")
     
     if change_rate >= 20:
@@ -1181,13 +1181,13 @@ def get_help():
 
 ▶ 검색량 비교
 예) 비교 부평맛집
-━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━
 🎲 재미 기능
-━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━
 ▶ 운세 & 로또
 예) 운세 & 운세 870114
 예) 로또
-━━━━━━━━━━━━━━━━━━━━━"""
+━━━━━━━━━━━━━━━"""
 
 #############################################
 # 카카오 스킬
