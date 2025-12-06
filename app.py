@@ -1102,13 +1102,23 @@ def get_store_count_by_region(adm_cd, industry_code=None):
             "type": "json"
         }
         
-        if industry_code:
-            params["indsLclsCd"] = industry_code
+        # ✅ 디버깅 로그 추가
+        logger.info(f"🔍 요청 URL: {url}")
+        logger.info(f"🔍 행정동 코드: {adm_cd}")
+        logger.info(f"🔍 파라미터: {params}")
         
         response = requests.get(url, params=params, timeout=5)
         
+        # ✅ 응답 상세 로그
+        logger.info(f"📥 상태코드: {response.status_code}")
+        logger.info(f"📥 응답 내용: {response.text[:500]}")  # 처음 500자만
+        
         if response.status_code == 200:
             data = response.json()
+            
+            # ✅ JSON 구조 확인
+            logger.info(f"📋 JSON 키: {list(data.keys())}")
+            
             body = data.get("body", {})
             items = body.get("items", [])
             total_count = body.get("totalCount", 0)
