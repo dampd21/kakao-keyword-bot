@@ -9,7 +9,7 @@ import random
 import re
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date
 from urllib.parse import quote
 import urllib.parse
 
@@ -28,6 +28,11 @@ NAVER_CLIENT_ID = os.environ.get('NAVER_CLIENT_ID', '')
 NAVER_CLIENT_SECRET = os.environ.get('NAVER_CLIENT_SECRET', '')
 KAKAO_REST_API_KEY = os.environ.get('KAKAO_REST_API_KEY', '')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+
+#############################################
+# 사용자 세션 저장소 (메모리 기반)
+#############################################
+user_sessions = {}
 
 #############################################
 # 환경변수 검증
@@ -106,7 +111,7 @@ def get_keyword_data(keyword, retry=1):
     for attempt in range(retry + 1):
         try:
             headers = get_naver_api_headers("GET", uri)
-            response = requests.get(base_url + uri, headers=headers, params=params, timeout=3)
+            response = requests.get(base_url + uri, headers=headers, params=params, timeout=5)
             
             if response.status_code == 200:
                 data = response.json()
@@ -144,7 +149,7 @@ def get_performance_estimate(keyword, bids, device='MOBILE', retry=1):
     for attempt in range(retry + 1):
         try:
             headers = get_naver_api_headers('POST', uri)
-            response = requests.post(url, headers=headers, json=payload, timeout=5)
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
             
             if response.status_code == 200:
                 return {"success": True, "data": response.json()}
@@ -267,10 +272,10 @@ def get_related_keywords_api(keyword):
     return response.strip()
 
 #############################################
-# 기본 기능: 광고 단가
+# 광고 단가 분석 - 전체 분석
 #############################################
-def get_ad_cost(keyword):
-    """광고 단가 분석"""
+def get_ad_cost_full(keyword):
+    """광고 단가 전체 분석 (기존 방식)"""
     result = get_keyword_data(keyword)
     if not result["success"]:
         return f"조회 실패: {result['error']}"
@@ -494,6 +499,153 @@ def get_ad_cost(keyword):
         lines.append("• 품질점수 관리로 CPC 절감 가능")
         lines.append("")
         lines.append("━━━━━━━━━━━━━━")
+    
+    return "\n".join(lines)
+
+#############################################
+# 광고 단가 분석 - 맞춤 분석 (사용자 입찰가)
+#############################################
+def get_ad_cost_custom(keyword, user_bid):
+    """사용자 지정 입찰가 성과 분석"""
+    
+    logger.info(f"🎯 맞춤 분석: {keyword} / 입찰가: {user_bid}원")
+    
+    # 1. 키워드 기본 정보
+    result = get_keyword_data(keyword)
+    if not result["success"]:
+        return f"조회 실패: {result['error']}"
+    
+    kw = result["data"][0]
+    keyword_name = kw.get('relKeyword', keyword)
+    pc_qc = parse_count(kw.get("monthlyPcQcCnt"))
+    mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
+    total_qc = pc_qc + mobile_qc
+    mobile_ratio = (mobile_qc * 100 / total_qc) if total_qc > 0 else 75
+    comp_idx = kw.get("compIdx", "중간")
+    
+    # 2. 사용자 입찰가로 성과 예측
+    perf = get_performance_estimate(keyword_name, [user_bid], 'MOBILE')
+    
+    if not perf.get("success"):
+        return f"❌ 입찰가 {format_number(user_bid)}원 조회 실패\n\n다른 금액으로 시도해주세요."
+    
+    estimates = perf["data"].get("estimate", [])
+    if not estimates:
+        return "❌ 예상 성과 데이터가 없습니다."
+    
+    est = estimates[0]
+    clicks = est.get('clicks', 0)
+    cost = est.get('cost', 0)
+    
+    if cost == 0 and clicks > 0:
+        cost = int(clicks * user_bid * 0.8)
+    
+    # 3. CTR 계산 (검색광고 업계 평균 기준)
+    # 실제 CTR = (클릭수 / 노출수) * 100
+    # 노출수는 검색량의 일부로 추정 (광고 게재율 약 40~60%)
+    if clicks > 0 and mobile_qc > 0:
+        # 가정: 모바일 검색량의 50%가 광고 노출
+        estimated_impressions = mobile_qc * 0.5
+        estimated_ctr = (clicks / estimated_impressions) * 100
+        
+        # 일반적인 검색광고 CTR 범위: 0.5% ~ 5%
+        # 너무 높거나 낮으면 보정
+        if estimated_ctr > 5:
+            estimated_ctr = 2.5  # 상한선
+        elif estimated_ctr < 0.3:
+            estimated_ctr = 1.0  # 하한선
+    else:
+        estimated_ctr = 1.5  # 업계 평균값
+    
+    # 4. 응답 생성
+    comp_emoji = "🔴" if comp_idx == "높음" else "🟡" if comp_idx == "중간" else "🟢"
+    
+    lines = [f"💰 [{keyword_name}] 입찰가 {format_number(user_bid)}원", ""]
+    
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("📊 키워드 정보")
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("")
+    lines.append(f"경쟁도: {comp_idx} {comp_emoji}")
+    lines.append(f"월간 검색량: {format_number(total_qc)}회")
+    lines.append(f"├ 모바일: {format_number(mobile_qc)}회 ({mobile_ratio:.0f}%)")
+    lines.append(f"└ PC: {format_number(pc_qc)}회 ({100-mobile_ratio:.0f}%)")
+    lines.append("")
+    
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("🎯 예상 성과")
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("")
+    
+    if clicks > 0:
+        lines.append(f"✅ 예상 CTR: {estimated_ctr:.2f}%")
+        lines.append(f"   (업계 평균: 1.5~3.0%)")
+        lines.append("")
+        lines.append(f"✅ 월 예상 클릭: {clicks}회")
+        lines.append(f"✅ 월 예상 비용: {format_won(cost)}")
+        lines.append("")
+        
+        cpc = int(cost / clicks)
+        daily_cost = cost / 30
+        
+        lines.append(f"✅ 실제 클릭당 비용: 약 {format_number(cpc)}원")
+        lines.append(f"   (입찰가 대비 {cpc/user_bid*100:.0f}%)")
+        lines.append("")
+        lines.append(f"✅ 일 예산 필요: 약 {format_won(daily_cost)}")
+        lines.append("")
+        
+        # 효율성 평가
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("💡 평가")
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("")
+        
+        if clicks >= 30:
+            lines.append("✅ 충분한 노출 예상")
+            lines.append("✅ 해당 입찰가 적정")
+            
+            if estimated_ctr >= 2.0:
+                lines.append("✅ CTR 우수 - 광고 품질 좋음")
+            elif estimated_ctr >= 1.0:
+                lines.append("→ CTR 보통 - 광고 소재 개선 권장")
+            else:
+                lines.append("⚠️ CTR 낮음 - 광고 문구 수정 필요")
+                
+        elif clicks >= 10:
+            lines.append("⚠️ 클릭 수 다소 적음")
+            lines.append(f"→ {format_number(user_bid + 200)}~{format_number(user_bid + 500)}원 권장")
+            
+            if comp_idx == "높음":
+                lines.append("→ 경쟁 치열 - 더 높은 입찰가 필요")
+                
+        else:
+            lines.append("❌ 입찰가 너무 낮음")
+            lines.append(f"→ 최소 {format_number(user_bid * 2)}원 이상 필요")
+            lines.append("")
+            lines.append("※ 현재 입찰가로는 광고 노출 어려움")
+    else:
+        lines.append("❌ 예상 클릭 0회")
+        lines.append("")
+        lines.append("입찰가가 너무 낮습니다.")
+        lines.append("최소 500원 이상으로 설정하세요.")
+        lines.append("")
+        
+        # 최소 추천 입찰가 찾기
+        test_bids = [500, 700, 1000, 1500, 2000]
+        min_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
+        
+        if min_perf.get("success"):
+            min_estimates = min_perf["data"].get("estimate", [])
+            for e in sorted(min_estimates, key=lambda x: x.get('bid', 0)):
+                if e.get('clicks', 0) > 0:
+                    min_bid = e.get('bid', 0)
+                    lines.append(f"💡 추천: 최소 {format_number(min_bid)}원부터 시작")
+                    break
+    
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("")
+    lines.append("※ 다른 입찰가 테스트: '광고 " + keyword_name + "'")
     
     return "\n".join(lines)
 
@@ -780,7 +932,7 @@ def get_datalab_trend(keyword, start_date, end_date):
     try:
         logger.info(f"📡 DataLab 요청: {keyword} ({start_date} ~ {end_date})")
         
-        response = requests.post(url, headers=headers, json=payload, timeout=3)
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
         
         logger.info(f"📥 상태코드: {response.status_code}")
         
@@ -800,7 +952,7 @@ def get_datalab_trend(keyword, start_date, end_date):
         return {"success": False, "error": f"상태코드 {response.status_code}"}
         
     except requests.Timeout:
-        logger.error("❌ 타임아웃 (3초)")
+        logger.error("❌ 타임아웃 (10초)")
         return {"success": False, "error": "요청 시간 초과"}
     except Exception as e:
         logger.error(f"❌ 예외: {str(e)}")
@@ -839,16 +991,7 @@ def get_comparison_analysis(keyword):
     
     if not trend_2025["success"] or not trend_2024["success"]:
         logger.warning(f"⚠️ DataLab API 실패")
-        return {
-            "keyword": keyword,
-            "volume_2025": total_volume_2025,
-            "volume_2024": None,
-            "change_rate": 0,
-            "mobile_ratio": mobile_ratio,
-            "monthly_2025": [],
-            "monthly_2024": [],
-            "datalab_available": False
-        }
+        return create_fallback_comparison(keyword, total_volume_2025, mobile_ratio)
     
     data_2025 = trend_2025["data"]
     data_2024 = trend_2024["data"]
@@ -917,7 +1060,6 @@ def create_fallback_comparison(keyword, current_volume, mobile_ratio):
 #############################################
 # QuickChart 차트 생성
 #############################################
-
 def create_comparison_chart_url(analysis):
     """비교 분석 막대 그래프"""
     
@@ -998,10 +1140,6 @@ def create_comparison_chart_url(analysis):
     except Exception as e:
         logger.error(f"❌ 비교 차트 생성 오류: {str(e)}")
         return None
-
-#############################################
-# 텍스트 포맷 함수들
-#############################################
 
 def format_comparison_text(analysis):
     """비교 분석 전체 텍스트"""
@@ -1111,27 +1249,18 @@ def format_comparison_text(analysis):
     
     return "\n".join(lines)
 
-#############################################
-# 카카오 응답 함수들
-#############################################
-
 def create_kakao_comparison_response(keyword, analysis):
     """비교 - 막대그래프 + 전체 텍스트"""
     
     if not analysis:
         return create_kakao_response("[검색량 비교] 조회 실패")
     
-    # 차트 URL 생성
     chart_url = create_comparison_chart_url(analysis)
-    
-    # 전체 텍스트
     full_text = format_comparison_text(analysis)
     
-    # 차트 실패 시 텍스트만
     if not chart_url:
         return create_kakao_response(full_text)
     
-    # 차트 + 텍스트
     return jsonify({
         "version": "2.0",
         "template": {
@@ -1174,6 +1303,7 @@ def get_help():
 
 ▶ 광고 단가 분석
 예) 광고 부평맛집
+→ 입찰가 입력 가능
 
 ▶ 대표 키워드
 예) 대표 1234567890
@@ -1190,7 +1320,7 @@ def get_help():
 ━━━━━━━━━━━━━━━"""
 
 #############################################
-# 카카오 스킬
+# 카카오 스킬 - 통합 엔드포인트
 #############################################
 @app.route('/skill', methods=['POST'])
 def kakao_skill():
@@ -1199,15 +1329,19 @@ def kakao_skill():
         if request_data is None:
             return create_kakao_response("요청 데이터 오류")
         
+        user_id = request_data.get("userRequest", {}).get("user", {}).get("id", "unknown")
         user_utterance = request_data.get("userRequest", {}).get("utterance", "").strip()
+        
         if not user_utterance:
             return create_kakao_response("명령어를 입력해주세요!\n\n'도움말' 입력")
         
         lower_input = user_utterance.lower()
         
+        # 도움말
         if lower_input in ["도움말", "도움", "사용법", "help", "?"]:
             return create_kakao_response(get_help())
         
+        # 운세
         if lower_input.startswith("운세 "):
             birthdate = ''.join(filter(str.isdigit, user_utterance))
             if birthdate and len(birthdate) in [6, 8]:
@@ -1217,10 +1351,11 @@ def kakao_skill():
         if lower_input in ["운세", "오늘운세"]:
             return create_kakao_response(get_fortune())
         
+        # 로또
         if lower_input in ["로또", "로또번호"]:
             return create_kakao_response(get_lotto())
         
-        # 비교 - 막대그래프 + 전체 텍스트
+        # 비교
         if lower_input.startswith("비교 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
@@ -1228,32 +1363,28 @@ def kakao_skill():
                 return create_kakao_comparison_response(keyword, analysis)
             return create_kakao_response("예) 비교 부평맛집")
         
-        # 광고 - 텍스트만
-        if lower_input.startswith("광고 "):
-            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
-            keyword = clean_keyword(keyword)
-            if keyword:
-                return create_kakao_response(get_ad_cost(keyword))
-            return create_kakao_response("예) 광고 부평맛집")
-        
+        # 유튜브
         if lower_input.startswith("유튜브 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
                 return create_kakao_response(get_youtube_autocomplete(keyword))
             return create_kakao_response("예) 유튜브 부평맛집")
         
+        # 자동완성
         if lower_input.startswith("자동 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
                 return create_kakao_response(get_autocomplete(keyword))
             return create_kakao_response("예) 자동 부평맛집")
         
+        # 대표키워드
         if lower_input.startswith("대표 "):
             input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if input_text:
                 return create_kakao_response(format_place_keywords(input_text))
             return create_kakao_response("예) 대표 1234567890")
         
+        # 연관키워드
         if lower_input.startswith("연관 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1261,7 +1392,92 @@ def kakao_skill():
                 return create_kakao_response(get_related_keywords(keyword))
             return create_kakao_response("예) 연관 부평맛집")
         
+        #############################################
+        # 🆕 광고 기능 - 2단계 대화 (세션 기반)
+        #############################################
+        
+        # 1단계: "광고 부평맛집" 입력 → 입찰가 물어보기
+        if lower_input.startswith("광고 "):
+            keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
+            keyword = clean_keyword(keyword)
+            
+            if not keyword:
+                return create_kakao_response("예) 광고 부평맛집")
+            
+            # 세션에 키워드 저장
+            user_sessions[user_id] = {
+                "state": "waiting_for_bid",
+                "keyword": keyword,
+                "timestamp": time.time()
+            }
+            
+            logger.info(f"🎯 광고 1단계: {keyword} (사용자: {user_id})")
+            
+            # 입찰가 질문
+            return create_kakao_response(
+                f"[{keyword}] 광고 분석\n\n"
+                f"원하시는 클릭당 비용을 알려주세요.\n\n"
+                f"예) 300\n"
+                f"예) 500\n"
+                f"예) 1000\n\n"
+                f"※ 전체 키워드 분석이 필요하면 '패스'를 입력하세요."
+            )
+        
+        # 2단계: 입찰가 또는 "패스" 입력 받기
+        if user_id in user_sessions and user_sessions[user_id].get("state") == "waiting_for_bid":
+            session = user_sessions[user_id]
+            keyword = session["keyword"]
+            
+            # 세션 타임아웃 체크 (5분)
+            if time.time() - session.get("timestamp", 0) > 300:
+                del user_sessions[user_id]
+                return create_kakao_response("세션이 만료되었습니다.\n\n다시 '광고 키워드'를 입력해주세요.")
+            
+            # 2-1: "패스" 입력 → 전체 분석
+            if lower_input == "패스":
+                logger.info(f"🎯 광고 2단계(전체): {keyword}")
+                
+                # 세션 삭제
+                del user_sessions[user_id]
+                
+                # 전체 분석 실행
+                return create_kakao_response(get_ad_cost_full(keyword))
+            
+            # 2-2: 숫자 입력 → 맞춤 분석
+            bid_input = ''.join(filter(str.isdigit, user_utterance))
+            
+            if bid_input:
+                user_bid = int(bid_input)
+                
+                logger.info(f"🎯 광고 2단계(맞춤): {keyword} / {user_bid}원")
+                
+                # 세션 삭제
+                del user_sessions[user_id]
+                
+                # 입찰가 검증
+                if user_bid < 70:
+                    # 세션 유지하고 다시 입력 요청
+                    user_sessions[user_id] = session
+                    return create_kakao_response("입찰가는 최소 70원 이상이어야 합니다.\n\n다시 입력해주세요.")
+                
+                if user_bid > 100000:
+                    # 세션 유지하고 다시 입력 요청
+                    user_sessions[user_id] = session
+                    return create_kakao_response("입찰가는 100,000원 이하로 입력해주세요.\n\n다시 입력해주세요.")
+                
+                # 맞춤 분석 실행
+                return create_kakao_response(get_ad_cost_custom(keyword, user_bid))
+            
+            # 잘못된 입력
+            return create_kakao_response(
+                "입찰가를 숫자로 입력해주세요.\n\n"
+                "예) 300\n\n"
+                "또는 '패스'를 입력하면 전체 분석을 보여드립니다."
+            )
+        
+        #############################################
         # 기본: 검색량
+        #############################################
         keyword = user_utterance.strip()
         if "," in keyword:
             return create_kakao_response(get_search_volume(keyword))
@@ -1273,6 +1489,7 @@ def kakao_skill():
         return create_kakao_response("오류 발생\n잠시 후 다시 시도해주세요.")
 
 def create_kakao_response(text):
+    """카카오 스킬 기본 응답 생성"""
     if len(text) > 1000:
         text = text[:997] + "..."
     return jsonify({
@@ -1311,6 +1528,20 @@ def test_chart():
 </body></html>"""
     
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+#############################################
+# 세션 정리 (주기적 실행 권장)
+#############################################
+def cleanup_old_sessions():
+    """5분 이상 지난 세션 삭제"""
+    current_time = time.time()
+    expired_users = [
+        user_id for user_id, session in user_sessions.items()
+        if current_time - session.get("timestamp", 0) > 300
+    ]
+    for user_id in expired_users:
+        del user_sessions[user_id]
+        logger.info(f"🗑️ 세션 정리: {user_id}")
 
 #############################################
 # 서버 실행
