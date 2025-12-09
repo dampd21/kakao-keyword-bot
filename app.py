@@ -220,42 +220,97 @@ def get_performance_estimate(keyword, bids, device='MOBILE', retry=1):
 # 실시간 순위별 입찰가 API
 #############################################
 def get_real_rank_bids(keyword):
-    """실시간 순위별 최소 입찰가 조회"""
+    """평균 순위별 입찰가 조회 (실제 API)"""
     
     if not validate_required_keys():
         return {"success": False, "error": "API 키가 설정되지 않았습니다."}
     
-    uri = '/estimate/bid-landscape'
+    # ⭐ 실제 엔드포인트
+    uri = '/estimate/average-position-bid/keyword'
     url = f'https://api.searchad.naver.com{uri}'
     
-    payload = {
-        "keyword": keyword,
-        "bizhourly": False
-    }
+    # 모바일과 PC 모두 조회
+    results = {}
     
-    try:
-        headers = get_naver_api_headers('POST', uri)
-        logger.info(f"📡 Bid Landscape 요청: {keyword}")
+    for device in ['MOBILE', 'PC']:
+        payload = {
+            "device": device,
+            "items": [
+                {
+                    "key": keyword,
+                    "position": 1
+                },
+                {
+                    "key": keyword,
+                    "position": 2
+                },
+                {
+                    "key": keyword,
+                    "position": 3
+                },
+                {
+                    "key": keyword,
+                    "position": 4
+                },
+                {
+                    "key": keyword,
+                    "position": 5
+                }
+            ]
+        }
         
-        response = requests.post(url, headers=headers, json=payload, timeout=3)
-        
-        logger.info(f"📥 상태코드: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            logger.info(f"✅ 응답 데이터: {json.dumps(data, ensure_ascii=False)[:200]}")
-            return {"success": True, "data": data}
-        else:
-            logger.error(f"❌ API 오류: {response.status_code}")
-            logger.error(f"응답: {response.text}")
-            return {"success": False, "error": f"API 오류 ({response.status_code})"}
+        try:
+            headers = get_naver_api_headers('POST', uri)
+            logger.info(f"📡 Average Position Bid 요청: {keyword} ({device})")
             
-    except requests.Timeout:
-        logger.error("❌ 타임아웃")
-        return {"success": False, "error": "요청 시간 초과"}
-    except Exception as e:
-        logger.error(f"❌ 예외: {str(e)}")
-        return {"success": False, "error": str(e)}
+            response = requests.post(url, headers=headers, json=payload, timeout=3)
+            
+            logger.info(f"📥 상태코드 ({device}): {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                results[device] = data.get("estimate", [])
+                logger.info(f"✅ {device} 응답 성공")
+            else:
+                logger.error(f"❌ {device} API 오류: {response.status_code}")
+                logger.error(f"응답: {response.text}")
+                return {"success": False, "error": f"API 오류 ({response.status_code})"}
+        
+        except Exception as e:
+            logger.error(f"❌ {device} 예외: {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    # 응답 변환 (bidLandscape 형식으로)
+    bid_landscape = []
+    
+    for i in range(5):
+        mobile_data = results.get('MOBILE', [])
+        pc_data = results.get('PC', [])
+        
+        mobile_bid = 0
+        pc_bid = 0
+        
+        if i < len(mobile_data):
+            mobile_bid = mobile_data[i].get('bid', 0)
+        
+        if i < len(pc_data):
+            pc_bid = pc_data[i].get('bid', 0)
+        
+        if mobile_bid > 0 or pc_bid > 0:
+            bid_landscape.append({
+                "rank": i + 1,
+                "mobileBid": mobile_bid,
+                "pcBid": pc_bid
+            })
+    
+    logger.info(f"✅ 순위별 입찰가 생성: {len(bid_landscape)}개")
+    
+    return {
+        "success": True,
+        "data": {
+            "bidLandscape": bid_landscape
+        }
+    }
 
 def estimate_rank_from_bid(keyword, user_bid):
     """입찰가로 예상 순위 추정"""
