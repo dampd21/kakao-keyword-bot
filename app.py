@@ -260,7 +260,6 @@ def get_real_rank_bids(keyword):
             logger.error(f"❌ {device} 예외: {str(e)}", exc_info=True)
             return {"success": False, "error": str(e)}
     
-    # 응답 변환
     bid_landscape = []
     
     mobile_estimates = results.get('MOBILE', [])
@@ -275,12 +274,10 @@ def get_real_rank_bids(keyword):
         
         if i < len(mobile_estimates):
             mobile_item = mobile_estimates[i]
-            # ⭐ 변환 제거 - 그대로 사용
             mobile_bid = mobile_item.get('bid', 0)
         
         if i < len(pc_estimates):
             pc_item = pc_estimates[i]
-            # ⭐ 변환 제거 - 그대로 사용
             pc_bid = pc_item.get('bid', 0)
         
         if mobile_bid > 0 or pc_bid > 0:
@@ -312,37 +309,26 @@ def estimate_rank_from_bid(keyword, user_bid):
         
         if not result.get("success"):
             logger.warning(f"⚠️ 순위 추정 실패: {keyword}")
-            return {"rank": 6, "rank_text": "미확인", "share": 30}
+            return {"rank": 99, "rank_text": "미확인", "share": 10}
         
         data = result["data"]
+        bid_list = data.get("bidLandscape", [])
         
-        bid_list = None
-        if "bidLandscape" in data:
-            bid_list = data["bidLandscape"]
-        elif "ranks" in data:
-            bid_list = data["ranks"]
-        elif isinstance(data, list):
-            bid_list = data
-        elif "data" in data:
-            bid_list = data["data"]
-        
-        if not bid_list or len(bid_list) == 0:
-            logger.warning(f"⚠️ bid_list 없음: {keyword}")
-            return {"rank": 6, "rank_text": "미확인", "share": 30}
+        if not bid_list:
+            return {"rank": 99, "rank_text": "미확인", "share": 10}
         
         for item in bid_list:
-            rank_raw = item.get("rank") or item.get("position")
+            rank_raw = item.get("rank")
             
             try:
                 rank = int(rank_raw) if rank_raw is not None else 0
             except (ValueError, TypeError):
-                logger.warning(f"⚠️ rank 변환 실패: {rank_raw}")
                 continue
             
             if rank <= 0:
                 continue
             
-            mobile_bid_raw = item.get("mobileBid") or item.get("mobile") or item.get("mobileMinBid", 0)
+            mobile_bid_raw = item.get("mobileBid", 0)
             
             try:
                 mobile_bid = int(mobile_bid_raw) if mobile_bid_raw else 0
@@ -350,25 +336,36 @@ def estimate_rank_from_bid(keyword, user_bid):
                 mobile_bid = 0
             
             if mobile_bid > 0 and user_bid >= mobile_bid:
-                share = IMPRESSION_SHARE_BY_RANK.get(rank, 30)
+                share = IMPRESSION_SHARE_BY_RANK.get(rank, 20)
                 return {
                     "rank": rank,
                     "rank_text": f"{rank}위",
                     "share": share
                 }
         
+        lowest_rank = bid_list[-1] if bid_list else {}
+        lowest_bid = int(lowest_rank.get("mobileBid", 0))
+        
+        if user_bid < lowest_bid:
+            return {
+                "rank": 99,
+                "rank_text": "광고 미노출 가능",
+                "share": 5,
+                "min_bid": lowest_bid
+            }
+        
         return {
             "rank": 6,
             "rank_text": "6위 이하",
-            "share": 20
+            "share": 15
         }
     
     except Exception as e:
         logger.error(f"❌ estimate_rank_from_bid 오류: {str(e)}", exc_info=True)
-        return {"rank": 6, "rank_text": "미확인", "share": 30}
+        return {"rank": 99, "rank_text": "미확인", "share": 10}
 
 def format_real_rank_bids(keyword):
-    """순위별 입찰가 포맷팅 (병렬 처리)"""
+    """순위별 입찰가 포맷팅"""
     
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -407,33 +404,22 @@ def format_real_rank_bids(keyword):
         
         lines = [f"[{keyword_name}] 순위별 최소 입찰가", ""]
         
-        bid_list = None
-        if "bidLandscape" in data:
-            bid_list = data["bidLandscape"]
-        elif "ranks" in data:
-            bid_list = data["ranks"]
-        elif isinstance(data, list):
-            bid_list = data
-        elif "data" in data:
-            bid_list = data["data"]
+        bid_list = data.get("bidLandscape", [])
         
         if not bid_list or len(bid_list) == 0:
             lines.append("❌ 순위별 입찰가 데이터 없음")
-            lines.append("")
-            lines.append("📋 API 응답:")
-            lines.append(json.dumps(data, ensure_ascii=False, indent=2)[:300])
             return "\n".join(lines)
         
         for i, item in enumerate(bid_list[:5], 1):
-            rank_raw = item.get("rank") or item.get("position") or i
+            rank_raw = item.get("rank") or i
             
             try:
                 rank = int(rank_raw)
             except (ValueError, TypeError):
                 rank = i
             
-            pc_bid_raw = item.get("pcBid") or item.get("pc") or item.get("pcMinBid") or 0
-            mobile_bid_raw = item.get("mobileBid") or item.get("mobile") or item.get("mobileMinBid") or 0
+            pc_bid_raw = item.get("pcBid") or 0
+            mobile_bid_raw = item.get("mobileBid") or 0
             
             try:
                 pc_bid = int(pc_bid_raw) if pc_bid_raw else 0
@@ -793,10 +779,33 @@ def get_ad_cost_full(keyword):
         lines.append("")
         lines.append("━━━━━━━━━━━━━━")
     
+    rank_check = get_with_cache(f"bid_{keyword_name}", get_real_rank_bids, keyword_name)
+    
+    if rank_check.get("success"):
+        bid_landscape = rank_check["data"].get("bidLandscape", [])
+        
+        if bid_landscape:
+            lines.append("")
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("📊 순위별 최소 입찰가 (참고)")
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("")
+            
+            for item in bid_landscape[:3]:
+                rank = item.get("rank", 0)
+                mobile_bid = item.get("mobileBid", 0)
+                
+                lines.append(f"{rank}위: {format_number(mobile_bid)}원 이상")
+            
+            lines.append("")
+            lines.append("※ 전체 순위: '광고 키워드' → '순위'")
+            lines.append("")
+            lines.append("━━━━━━━━━━━━━━")
+    
     return "\n".join(lines)
 
 #############################################
-# 광고 단가 분석 - 맞춤 분석 (순위/점유율 적용)
+# 광고 단가 분석 - 맞춤 분석
 #############################################
 def get_ad_cost_custom(keyword, user_bid):
     """사용자 지정 입찰가 성과 분석"""
@@ -832,7 +841,7 @@ def get_ad_cost_custom(keyword, user_bid):
         if cost == 0 and clicks > 0:
             cost = int(clicks * user_bid * 0.8)
         
-        rank_info = {"rank": 6, "rank_text": "미확인", "share": 30}
+        rank_info = {"rank": 99, "rank_text": "미확인", "share": 10}
         try:
             rank_info = estimate_rank_from_bid(keyword_name, user_bid)
         except Exception as e:
@@ -860,11 +869,21 @@ def get_ad_cost_custom(keyword, user_bid):
         if clicks > 0:
             rank_text = rank_info.get('rank_text', '미확인')
             share = rank_info.get('share', 30)
+            rank = rank_info.get('rank', 99)
             
             lines.append(f"✅ 예상 순위: {rank_text}")
             lines.append(f"✅ 노출 점유율: 약 {share}%")
-            lines.append(f"   (검색 10회 중 {share//10}회 광고 노출)")
-            lines.append("")
+            
+            if rank >= 99:
+                min_bid = rank_info.get('min_bid', 0)
+                if min_bid > 0:
+                    lines.append("")
+                    lines.append(f"⚠️ 경고: 광고가 노출되지 않을 수 있습니다")
+                    lines.append(f"   최소 {format_number(min_bid)}원 이상 필요")
+                    lines.append("")
+            else:
+                lines.append(f"   (검색 10회 중 {share//10}회 광고 노출)")
+                lines.append("")
             
             lines.append(f"✅ 월 예상 클릭: {clicks}회")
             lines.append(f"✅ 월 예상 비용: {format_won(cost)}")
@@ -888,15 +907,13 @@ def get_ad_cost_custom(keyword, user_bid):
                 lines.append("✅ 충분한 노출 예상")
                 lines.append("✅ 해당 입찰가 적정")
                 
-                rank = rank_info.get('rank', 6)
-                
                 if isinstance(rank, str):
                     try:
                         rank = int(rank)
                     except ValueError:
-                        rank = 6
+                        rank = 99
                 elif not isinstance(rank, int):
-                    rank = 6
+                    rank = 99
                 
                 if rank <= 2:
                     lines.append("✅ 상위 노출 - 효과 우수")
@@ -918,14 +935,13 @@ def get_ad_cost_custom(keyword, user_bid):
                 lines.append("")
                 lines.append("※ 현재 입찰가로는 광고 노출 어려움")
             
-            rank = rank_info.get('rank', 6)
             if isinstance(rank, str):
                 try:
                     rank = int(rank)
                 except ValueError:
-                    rank = 6
+                    rank = 99
             elif not isinstance(rank, int):
-                rank = 6
+                rank = 99
             
             if rank > 1:
                 lines.append("")
@@ -937,10 +953,10 @@ def get_ad_cost_custom(keyword, user_bid):
                     )
                     if bid_result.get("success"):
                         data = bid_result["data"]
-                        bid_list = data.get("bidLandscape") or data.get("ranks") or []
+                        bid_list = data.get("bidLandscape") or []
                         if bid_list and len(bid_list) > 0:
                             first_rank = bid_list[0]
-                            mobile_bid_1st = first_rank.get("mobileBid") or first_rank.get("mobile", 0)
+                            mobile_bid_1st = first_rank.get("mobileBid", 0)
                             try:
                                 mobile_bid_1st = int(mobile_bid_1st) if mobile_bid_1st else 0
                             except (ValueError, TypeError):
@@ -1737,11 +1753,11 @@ def kakao_skill():
             return create_kakao_response(
                 f"[{keyword}] 광고 분석\n\n"
                 f"분석 방식을 선택하세요:\n\n"
-                f"A. 숫자 입력 (예: 3000)\n"
+                f"1️⃣ 숫자 입력 (예: 3000)\n"
                 f"   → 맞춤 성과 분석\n\n"
-                f"B. 전체\n"
+                f"2️⃣ 전체\n"
                 f"   → 종합 광고 분석\n\n"
-                f"C. 순위\n"
+                f"3️⃣ 순위\n"
                 f"   → 실시간 순위별 입찰가"
             )
         
@@ -1756,7 +1772,7 @@ def kakao_skill():
             del user_sessions[user_id]
             
             if lower_input == "순위":
-                logger.info(f"🎯 광고 2단계(순위): {keyword}")
+                logger.info(f("🎯 광고 2단계(순위): {keyword}")
                 return create_kakao_response(format_real_rank_bids(keyword))
             
             elif lower_input == "전체":
