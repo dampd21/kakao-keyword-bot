@@ -220,7 +220,7 @@ def get_performance_estimate(keyword, bids, device='MOBILE', retry=1):
 # 실시간 순위별 입찰가 API
 #############################################
 def get_real_rank_bids(keyword):
-    """평균 순위별 입찰가 조회 (실제 API)"""
+    """평균 순위별 입찰가 조회"""
     
     if not validate_required_keys():
         return {"success": False, "error": "API 키가 설정되지 않았습니다."}
@@ -231,10 +231,7 @@ def get_real_rank_bids(keyword):
     results = {}
     
     for device in ['MOBILE', 'PC']:
-        # 디바이스별 최대 순위
         max_position = 5 if device == 'MOBILE' else 10
-        
-        # ⭐ key 사용 (keyword 아님!)
         items = [{"key": keyword, "position": pos} for pos in range(1, min(6, max_position + 1))]
         
         payload = {
@@ -245,7 +242,6 @@ def get_real_rank_bids(keyword):
         try:
             headers = get_naver_api_headers('POST', uri)
             logger.info(f"📡 Average Position Bid 요청: {keyword} ({device})")
-            logger.info(f"📤 Payload: {json.dumps(payload, ensure_ascii=False)}")
             
             response = requests.post(url, headers=headers, json=payload, timeout=3)
             
@@ -279,13 +275,13 @@ def get_real_rank_bids(keyword):
         
         if i < len(mobile_estimates):
             mobile_item = mobile_estimates[i]
-            mobile_bid_raw = mobile_item.get('bid', 0)
-            mobile_bid = mobile_bid_raw * 10
+            # ⭐ 변환 제거 - 그대로 사용
+            mobile_bid = mobile_item.get('bid', 0)
         
         if i < len(pc_estimates):
             pc_item = pc_estimates[i]
-            pc_bid_raw = pc_item.get('bid', 0)
-            pc_bid = pc_bid_raw * 10
+            # ⭐ 변환 제거 - 그대로 사용
+            pc_bid = pc_item.get('bid', 0)
         
         if mobile_bid > 0 or pc_bid > 0:
             bid_landscape.append({
