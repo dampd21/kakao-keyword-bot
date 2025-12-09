@@ -1641,11 +1641,11 @@ def kakao_skill():
             return create_kakao_response(
                 f"[{keyword}] 광고 분석\n\n"
                 f"분석 방식을 선택하세요:\n\n"
-                f"1. 숫자 입력 (예: 3000)\n"
+                f"A. 숫자 입력 (예: 3000)\n"
                 f"   → 맞춤 성과 분석\n\n"
-                f"2. 전체\n"
+                f"B. 전체\n"
                 f"   → 종합 광고 분석\n\n"
-                f"3. 순위\n"
+                f"C. 순위\n"
                 f"   → 실시간 순위별 입찰가"
             )
         
@@ -1662,45 +1662,66 @@ def kakao_skill():
             # 세션 삭제
             del user_sessions[user_id]
             
-            # 2-1: 숫자 입력 → 맞춤 분석
-            bid_input = ''.join(filter(str.isdigit, user_utterance))
-            
-            if bid_input:
-                user_bid = int(bid_input)
-                
-                logger.info(f"🎯 광고 2단계(맞춤): {keyword} / {user_bid}원")
-                
-                # 입찰가 검증
-                if user_bid < 70:
-                    user_sessions[user_id] = session
-                    return create_kakao_response("입찰가는 최소 70원 이상이어야 합니다.\n\n다시 입력해주세요.")
-                
-                if user_bid > 100000:
-                    user_sessions[user_id] = session
-                    return create_kakao_response("입찰가는 100,000원 이하로 입력해주세요.\n\n다시 입력해주세요.")
-                
-                # 맞춤 분석 실행
-                return create_kakao_response(get_ad_cost_custom(keyword, user_bid))
+            # 2-1: "순위" 입력 → 순위별 입찰가 ⭐ 우선순위 변경
+            if lower_input == "순위":
+                logger.info(f"🎯 광고 2단계(순위): {keyword}")
+                return create_kakao_response(format_real_rank_bids(keyword))
             
             # 2-2: "전체" → 종합 분석
             elif lower_input == "전체":
                 logger.info(f"🎯 광고 2단계(전체): {keyword}")
                 return create_kakao_response(get_ad_cost_full(keyword))
             
-            # 2-3: "순위" → 실시간 순위별 입찰가
-            elif lower_input == "순위":
-                logger.info(f"🎯 광고 2단계(순위): {keyword}")
-                return create_kakao_response(format_real_rank_bids(keyword))
-            
-            # 잘못된 입력
+            # 2-3: 숫자 입력 → 맞춤 분석
             else:
-                user_sessions[user_id] = session
-                return create_kakao_response(
-                    "다시 선택해주세요:\n\n"
-                    "• 숫자 (예: 3000)\n"
-                    "• 전체\n"
-                    "• 순위"
-                )
+                bid_input = ''.join(filter(str.isdigit, user_utterance))
+                
+                if bid_input:
+                    user_bid = int(bid_input)
+                    
+                    logger.info(f"🎯 광고 2단계(맞춤): {keyword} / {user_bid}원")
+                    
+                    # 입찰가 검증
+                    if user_bid < 70:
+                        user_sessions[user_id] = session
+                        return create_kakao_response("입찰가는 최소 70원 이상이어야 합니다.\n\n다시 입력해주세요.")
+                    
+                    if user_bid > 100000:
+                        user_sessions[user_id] = session
+                        return create_kakao_response("입찰가는 100,000원 이하로 입력해주세요.\n\n다시 입력해주세요.")
+                    
+                    # 맞춤 분석 실행
+                    return create_kakao_response(get_ad_cost_custom(keyword, user_bid))
+                
+                # 잘못된 입력
+                else:
+                    user_sessions[user_id] = session
+                    return create_kakao_response(
+                        "다시 선택해주세요:\n\n"
+                        "• 숫자 (예: 3000)\n"
+                        "• 전체\n"
+                        "• 순위"
+                    )
+        
+        #############################################
+        # ⭐ 세션 없이 "순위" 또는 숫자만 입력한 경우 처리
+        #############################################
+        
+        # 세션 없이 "순위" 입력 → 안내 메시지
+        if lower_input == "순위":
+            return create_kakao_response(
+                "⚠️ 먼저 키워드를 입력해주세요.\n\n"
+                "예) 광고 강남맛집\n"
+                "→ 선택지에서 '순위' 선택"
+            )
+        
+        # 세션 없이 숫자만 입력 → 안내 메시지
+        if user_utterance.isdigit():
+            return create_kakao_response(
+                "⚠️ 먼저 키워드를 입력해주세요.\n\n"
+                "예) 광고 강남맛집\n"
+                "→ 입찰가 입력"
+            )
         
         #############################################
         # 기본: 검색량
@@ -1713,6 +1734,7 @@ def kakao_skill():
         
     except Exception as e:
         logger.error(f"스킬 오류: {str(e)}")
+        logger.error(f"스택 트레이스:", exc_info=True)
         return create_kakao_response("오류 발생\n잠시 후 다시 시도해주세요.")
 
 def create_kakao_response(text):
