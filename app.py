@@ -46,7 +46,7 @@ cache_lock = threading.Lock()
 # 순위별 노출 점유율 데이터
 #############################################
 IMPRESSION_SHARE_BY_RANK = {
-    1: 85,   # 1위는 검색 10회 중 8~9회 노출
+    1: 85,
     2: 70,
     3: 55,
     4: 40,
@@ -76,9 +76,10 @@ def validate_required_keys():
 # 유틸리티 함수
 #############################################
 def format_number(num):
-    if isinstance(num, int):
-        return "{:,}".format(num)
-    return str(num)
+    try:
+        return "{:,}".format(int(num))
+    except (ValueError, TypeError):
+        return str(num)
 
 def parse_count(value):
     if value is None:
@@ -95,12 +96,16 @@ def parse_count(value):
     return 0
 
 def format_won(value):
-    if value >= 100000000:
-        return f"{value / 100000000:.1f}억원"
-    elif value >= 10000:
-        return f"{value / 10000:.1f}만원"
-    else:
-        return f"{format_number(int(value))}원"
+    try:
+        value = int(value)
+        if value >= 100000000:
+            return f"{value / 100000000:.1f}억원"
+        elif value >= 10000:
+            return f"{value / 10000:.1f}만원"
+        else:
+            return f"{format_number(value)}원"
+    except (ValueError, TypeError):
+        return "0원"
 
 def clean_keyword(keyword):
     return keyword.replace(" ", "")
@@ -255,58 +260,75 @@ def get_real_rank_bids(keyword):
 def estimate_rank_from_bid(keyword, user_bid):
     """입찰가로 예상 순위 추정"""
     
-    # 순위별 입찰가 조회
-    result = get_with_cache(
-        f"bid_{keyword}",
-        get_real_rank_bids,
-        keyword,
-        ttl=300
-    )
-    
-    if not result.get("success"):
-        return {"rank": "미확인", "share": 30}
-    
-    data = result["data"]
-    
-    # API 응답 구조 파악
-    bid_list = None
-    if "bidLandscape" in data:
-        bid_list = data["bidLandscape"]
-    elif "ranks" in data:
-        bid_list = data["ranks"]
-    elif isinstance(data, list):
-        bid_list = data
-    elif "data" in data:
-        bid_list = data["data"]
-    
-    if not bid_list:
-        return {"rank": "미확인", "share": 30}
-    
-    # 모바일 입찰가로 순위 판단
-    for item in bid_list:
-        rank = item.get("rank") or item.get("position", 0)
-        mobile_bid = item.get("mobileBid") or item.get("mobile") or item.get("mobileMinBid", 0)
+    try:
+        result = get_with_cache(
+            f"bid_{keyword}",
+            get_real_rank_bids,
+            keyword,
+            ttl=300
+        )
         
-        if user_bid >= mobile_bid:
-            share = IMPRESSION_SHARE_BY_RANK.get(rank, 30)
-            return {
-                "rank": rank,
-                "rank_text": f"{rank}위",
-                "share": share
-            }
+        if not result.get("success"):
+            logger.warning(f"⚠️ 순위 추정 실패: {keyword}")
+            return {"rank": 6, "rank_text": "미확인", "share": 30}
+        
+        data = result["data"]
+        
+        bid_list = None
+        if "bidLandscape" in data:
+            bid_list = data["bidLandscape"]
+        elif "ranks" in data:
+            bid_list = data["ranks"]
+        elif isinstance(data, list):
+            bid_list = data
+        elif "data" in data:
+            bid_list = data["data"]
+        
+        if not bid_list or len(bid_list) == 0:
+            logger.warning(f"⚠️ bid_list 없음: {keyword}")
+            return {"rank": 6, "rank_text": "미확인", "share": 30}
+        
+        for item in bid_list:
+            rank_raw = item.get("rank") or item.get("position")
+            
+            try:
+                rank = int(rank_raw) if rank_raw is not None else 0
+            except (ValueError, TypeError):
+                logger.warning(f"⚠️ rank 변환 실패: {rank_raw}")
+                continue
+            
+            if rank <= 0:
+                continue
+            
+            mobile_bid_raw = item.get("mobileBid") or item.get("mobile") or item.get("mobileMinBid", 0)
+            
+            try:
+                mobile_bid = int(mobile_bid_raw) if mobile_bid_raw else 0
+            except (ValueError, TypeError):
+                mobile_bid = 0
+            
+            if mobile_bid > 0 and user_bid >= mobile_bid:
+                share = IMPRESSION_SHARE_BY_RANK.get(rank, 30)
+                return {
+                    "rank": rank,
+                    "rank_text": f"{rank}위",
+                    "share": share
+                }
+        
+        return {
+            "rank": 6,
+            "rank_text": "6위 이하",
+            "share": 20
+        }
     
-    # 6위 이하
-    return {
-        "rank": 6,
-        "rank_text": "6위 이하",
-        "share": 20
-    }
+    except Exception as e:
+        logger.error(f"❌ estimate_rank_from_bid 오류: {str(e)}", exc_info=True)
+        return {"rank": 6, "rank_text": "미확인", "share": 30}
 
 def format_real_rank_bids(keyword):
     """순위별 입찰가 포맷팅 (병렬 처리)"""
     
     try:
-        # 병렬 처리로 2개 API 동시 호출
         with ThreadPoolExecutor(max_workers=2) as executor:
             bid_future = executor.submit(
                 get_with_cache,
@@ -329,7 +351,6 @@ def format_real_rank_bids(keyword):
         
         data = bid_result["data"]
         
-        # 키워드 정보
         keyword_name = keyword
         total_qc = 0
         comp_idx = ""
@@ -344,7 +365,6 @@ def format_real_rank_bids(keyword):
         
         lines = [f"[{keyword_name}] 순위별 최소 입찰가", ""]
         
-        # API 응답 구조 파악
         bid_list = None
         if "bidLandscape" in data:
             bid_list = data["bidLandscape"]
@@ -362,11 +382,23 @@ def format_real_rank_bids(keyword):
             lines.append(json.dumps(data, ensure_ascii=False, indent=2)[:300])
             return "\n".join(lines)
         
-        # 순위별 출력
         for i, item in enumerate(bid_list[:5], 1):
-            rank = item.get("rank") or item.get("position") or i
-            pc_bid = item.get("pcBid") or item.get("pc") or item.get("pcMinBid") or 0
-            mobile_bid = item.get("mobileBid") or item.get("mobile") or item.get("mobileMinBid") or 0
+            rank_raw = item.get("rank") or item.get("position") or i
+            
+            try:
+                rank = int(rank_raw)
+            except (ValueError, TypeError):
+                rank = i
+            
+            pc_bid_raw = item.get("pcBid") or item.get("pc") or item.get("pcMinBid") or 0
+            mobile_bid_raw = item.get("mobileBid") or item.get("mobile") or item.get("mobileMinBid") or 0
+            
+            try:
+                pc_bid = int(pc_bid_raw) if pc_bid_raw else 0
+                mobile_bid = int(mobile_bid_raw) if mobile_bid_raw else 0
+            except (ValueError, TypeError):
+                pc_bid = 0
+                mobile_bid = 0
             
             lines.append(f"{rank}위")
             lines.append(f"PC: {format_number(pc_bid)}원")
@@ -385,7 +417,7 @@ def format_real_rank_bids(keyword):
         return "\n".join(lines)
         
     except Exception as e:
-        logger.error(f"❌ format_real_rank_bids 오류: {str(e)}")
+        logger.error(f"❌ format_real_rank_bids 오류: {str(e)}", exc_info=True)
         return f"[{keyword}] 조회 시간 초과\n\n잠시 후 다시 시도해주세요"
 
 #############################################
@@ -725,153 +757,187 @@ def get_ad_cost_full(keyword):
 # 광고 단가 분석 - 맞춤 분석 (순위/점유율 적용)
 #############################################
 def get_ad_cost_custom(keyword, user_bid):
-    """사용자 지정 입찰가 성과 분석 (CTR 제거, 순위/점유율 추가)"""
+    """사용자 지정 입찰가 성과 분석"""
     
-    logger.info(f"🎯 맞춤 분석: {keyword} / 입찰가: {user_bid}원")
-    
-    result = get_keyword_data(keyword)
-    if not result["success"]:
-        return f"조회 실패: {result['error']}"
-    
-    kw = result["data"][0]
-    keyword_name = kw.get('relKeyword', keyword)
-    pc_qc = parse_count(kw.get("monthlyPcQcCnt"))
-    mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
-    total_qc = pc_qc + mobile_qc
-    mobile_ratio = (mobile_qc * 100 / total_qc) if total_qc > 0 else 75
-    comp_idx = kw.get("compIdx", "중간")
-    
-    perf = get_performance_estimate(keyword_name, [user_bid], 'MOBILE')
-    
-    if not perf.get("success"):
-        return f"❌ 입찰가 {format_number(user_bid)}원 조회 실패\n\n다른 금액으로 시도해주세요."
-    
-    estimates = perf["data"].get("estimate", [])
-    if not estimates:
-        return "❌ 예상 성과 데이터가 없습니다."
-    
-    est = estimates[0]
-    clicks = est.get('clicks', 0)
-    cost = est.get('cost', 0)
-    
-    if cost == 0 and clicks > 0:
-        cost = int(clicks * user_bid * 0.8)
-    
-    # 순위 및 점유율 추정
-    rank_info = estimate_rank_from_bid(keyword_name, user_bid)
-    
-    comp_emoji = "🔴" if comp_idx == "높음" else "🟡" if comp_idx == "중간" else "🟢"
-    
-    lines = [f"💰 [{keyword_name}] 입찰가 {format_number(user_bid)}원", ""]
-    
-    lines.append("━━━━━━━━━━━━━━")
-    lines.append("📊 키워드 정보")
-    lines.append("━━━━━━━━━━━━━━")
-    lines.append("")
-    lines.append(f"경쟁도: {comp_idx} {comp_emoji}")
-    lines.append(f"월간 검색량: {format_number(total_qc)}회")
-    lines.append(f"├ 모바일: {format_number(mobile_qc)}회 ({mobile_ratio:.0f}%)")
-    lines.append(f"└ PC: {format_number(pc_qc)}회 ({100-mobile_ratio:.0f}%)")
-    lines.append("")
-    
-    lines.append("━━━━━━━━━━━━━━")
-    lines.append("🎯 예상 성과")
-    lines.append("━━━━━━━━━━━━━━")
-    lines.append("")
-    
-    if clicks > 0:
-        # ⭐ 순위 및 노출 점유율 표시
-        lines.append(f"✅ 예상 순위: {rank_info.get('rank_text', '미확인')}")
-        share = rank_info.get('share', 30)
-        lines.append(f"✅ 노출 점유율: 약 {share}%")
-        lines.append(f"   (검색 10회 중 {share//10}회 광고 노출)")
-        lines.append("")
+    try:
+        logger.info(f"🎯 맞춤 분석: {keyword} / 입찰가: {user_bid}원")
         
-        lines.append(f"✅ 월 예상 클릭: {clicks}회")
-        lines.append(f"✅ 월 예상 비용: {format_won(cost)}")
-        lines.append("")
+        result = get_keyword_data(keyword)
+        if not result["success"]:
+            return f"조회 실패: {result['error']}"
         
-        cpc = int(cost / clicks)
-        daily_cost = cost / 30
+        kw = result["data"][0]
+        keyword_name = kw.get('relKeyword', keyword)
+        pc_qc = parse_count(kw.get("monthlyPcQcCnt"))
+        mobile_qc = parse_count(kw.get("monthlyMobileQcCnt"))
+        total_qc = pc_qc + mobile_qc
+        mobile_ratio = (mobile_qc * 100 / total_qc) if total_qc > 0 else 75
+        comp_idx = kw.get("compIdx", "중간")
         
-        lines.append(f"✅ 실제 클릭당 비용: 약 {format_number(cpc)}원")
-        lines.append(f"   (입찰가 대비 {cpc/user_bid*100:.0f}%)")
+        perf = get_performance_estimate(keyword_name, [user_bid], 'MOBILE')
+        
+        if not perf.get("success"):
+            return f"❌ 입찰가 {format_number(user_bid)}원 조회 실패\n\n다른 금액으로 시도해주세요."
+        
+        estimates = perf["data"].get("estimate", [])
+        if not estimates:
+            return "❌ 예상 성과 데이터가 없습니다."
+        
+        est = estimates[0]
+        clicks = est.get('clicks', 0)
+        cost = est.get('cost', 0)
+        
+        if cost == 0 and clicks > 0:
+            cost = int(clicks * user_bid * 0.8)
+        
+        rank_info = {"rank": 6, "rank_text": "미확인", "share": 30}
+        try:
+            rank_info = estimate_rank_from_bid(keyword_name, user_bid)
+        except Exception as e:
+            logger.error(f"❌ 순위 추정 실패: {str(e)}")
+        
+        comp_emoji = "🔴" if comp_idx == "높음" else "🟡" if comp_idx == "중간" else "🟢"
+        
+        lines = [f"💰 [{keyword_name}] 입찰가 {format_number(user_bid)}원", ""]
+        
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("📊 키워드 정보")
+        lines.append("━━━━━━━━━━━━━━")
         lines.append("")
-        lines.append(f"✅ 일 예산 필요: 약 {format_won(daily_cost)}")
+        lines.append(f"경쟁도: {comp_idx} {comp_emoji}")
+        lines.append(f"월간 검색량: {format_number(total_qc)}회")
+        lines.append(f"├ 모바일: {format_number(mobile_qc)}회 ({mobile_ratio:.0f}%)")
+        lines.append(f"└ PC: {format_number(pc_qc)}회 ({100-mobile_ratio:.0f}%)")
         lines.append("")
         
         lines.append("━━━━━━━━━━━━━━")
-        lines.append("💡 평가")
+        lines.append("🎯 예상 성과")
         lines.append("━━━━━━━━━━━━━━")
         lines.append("")
         
-        if clicks >= 30:
-            lines.append("✅ 충분한 노출 예상")
-            lines.append("✅ 해당 입찰가 적정")
+        if clicks > 0:
+            rank_text = rank_info.get('rank_text', '미확인')
+            share = rank_info.get('share', 30)
             
-            # 순위 기반 평가
-            rank = rank_info.get('rank', 6)
-            if rank <= 2:
-                lines.append("✅ 상위 노출 - 효과 우수")
-            elif rank <= 4:
-                lines.append("→ 중상위 노출 - 안정적")
+            lines.append(f"✅ 예상 순위: {rank_text}")
+            lines.append(f"✅ 노출 점유율: 약 {share}%")
+            lines.append(f"   (검색 10회 중 {share//10}회 광고 노출)")
+            lines.append("")
+            
+            lines.append(f"✅ 월 예상 클릭: {clicks}회")
+            lines.append(f"✅ 월 예상 비용: {format_won(cost)}")
+            lines.append("")
+            
+            cpc = int(cost / clicks) if clicks > 0 else 0
+            daily_cost = cost / 30
+            
+            lines.append(f"✅ 실제 클릭당 비용: 약 {format_number(cpc)}원")
+            lines.append(f"   (입찰가 대비 {cpc/user_bid*100:.0f}%)")
+            lines.append("")
+            lines.append(f"✅ 일 예산 필요: 약 {format_won(daily_cost)}")
+            lines.append("")
+            
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("💡 평가")
+            lines.append("━━━━━━━━━━━━━━")
+            lines.append("")
+            
+            if clicks >= 30:
+                lines.append("✅ 충분한 노출 예상")
+                lines.append("✅ 해당 입찰가 적정")
+                
+                rank = rank_info.get('rank', 6)
+                
+                if isinstance(rank, str):
+                    try:
+                        rank = int(rank)
+                    except ValueError:
+                        rank = 6
+                elif not isinstance(rank, int):
+                    rank = 6
+                
+                if rank <= 2:
+                    lines.append("✅ 상위 노출 - 효과 우수")
+                elif rank <= 4:
+                    lines.append("→ 중상위 노출 - 안정적")
+                else:
+                    lines.append("→ 하위 노출 - 입찰가 증액 고려")
+                    
+            elif clicks >= 10:
+                lines.append("⚠️ 클릭 수 다소 적음")
+                lines.append(f"→ {format_number(user_bid + 200)}~{format_number(user_bid + 500)}원 권장")
+                
+                if comp_idx == "높음":
+                    lines.append("→ 경쟁 치열 - 더 높은 입찰가 필요")
+                    
             else:
-                lines.append("→ 하위 노출 - 입찰가 증액 고려")
-                
-        elif clicks >= 10:
-            lines.append("⚠️ 클릭 수 다소 적음")
-            lines.append(f"→ {format_number(user_bid + 200)}~{format_number(user_bid + 500)}원 권장")
+                lines.append("❌ 입찰가 너무 낮음")
+                lines.append(f"→ 최소 {format_number(user_bid * 2)}원 이상 필요")
+                lines.append("")
+                lines.append("※ 현재 입찰가로는 광고 노출 어려움")
             
-            if comp_idx == "높음":
-                lines.append("→ 경쟁 치열 - 더 높은 입찰가 필요")
-                
+            rank = rank_info.get('rank', 6)
+            if isinstance(rank, str):
+                try:
+                    rank = int(rank)
+                except ValueError:
+                    rank = 6
+            elif not isinstance(rank, int):
+                rank = 6
+            
+            if rank > 1:
+                lines.append("")
+                try:
+                    bid_result = get_with_cache(
+                        f"bid_{keyword_name}",
+                        get_real_rank_bids,
+                        keyword_name
+                    )
+                    if bid_result.get("success"):
+                        data = bid_result["data"]
+                        bid_list = data.get("bidLandscape") or data.get("ranks") or []
+                        if bid_list and len(bid_list) > 0:
+                            first_rank = bid_list[0]
+                            mobile_bid_1st = first_rank.get("mobileBid") or first_rank.get("mobile", 0)
+                            try:
+                                mobile_bid_1st = int(mobile_bid_1st) if mobile_bid_1st else 0
+                            except (ValueError, TypeError):
+                                mobile_bid_1st = 0
+                            if mobile_bid_1st > 0:
+                                lines.append(f"💡 1위 하려면: {format_number(mobile_bid_1st)}원 필요")
+                except Exception as e:
+                    logger.error(f"❌ 1위 입찰가 조회 실패: {str(e)}")
         else:
-            lines.append("❌ 입찰가 너무 낮음")
-            lines.append(f"→ 최소 {format_number(user_bid * 2)}원 이상 필요")
+            lines.append("❌ 예상 클릭 0회")
             lines.append("")
-            lines.append("※ 현재 입찰가로는 광고 노출 어려움")
-        
-        # 1위 입찰가 안내
-        if rank_info.get('rank', 6) > 1:
+            lines.append("입찰가가 너무 낮습니다.")
+            lines.append("최소 500원 이상으로 설정하세요.")
             lines.append("")
-            # 1위 입찰가 조회
-            bid_result = get_with_cache(
-                f"bid_{keyword_name}",
-                get_real_rank_bids,
-                keyword_name
-            )
-            if bid_result.get("success"):
-                data = bid_result["data"]
-                bid_list = data.get("bidLandscape") or data.get("ranks") or []
-                if bid_list and len(bid_list) > 0:
-                    first_rank = bid_list[0]
-                    mobile_bid_1st = first_rank.get("mobileBid") or first_rank.get("mobile", 0)
-                    if mobile_bid_1st > 0:
-                        lines.append(f"💡 1위 하려면: {format_number(mobile_bid_1st)}원 필요")
-    else:
-        lines.append("❌ 예상 클릭 0회")
-        lines.append("")
-        lines.append("입찰가가 너무 낮습니다.")
-        lines.append("최소 500원 이상으로 설정하세요.")
-        lines.append("")
+            
+            try:
+                test_bids = [500, 700, 1000, 1500, 2000]
+                min_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
+                
+                if min_perf.get("success"):
+                    min_estimates = min_perf["data"].get("estimate", [])
+                    for e in sorted(min_estimates, key=lambda x: x.get('bid', 0)):
+                        if e.get('clicks', 0) > 0:
+                            min_bid = e.get('bid', 0)
+                            lines.append(f"💡 추천: 최소 {format_number(min_bid)}원부터 시작")
+                            break
+            except Exception as e:
+                logger.error(f"❌ 최소 입찰가 조회 실패: {str(e)}")
         
-        test_bids = [500, 700, 1000, 1500, 2000]
-        min_perf = get_performance_estimate(keyword_name, test_bids, 'MOBILE')
+        lines.append("")
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("")
+        lines.append("※ 다른 입찰가 테스트: '광고 " + keyword_name + "'")
         
-        if min_perf.get("success"):
-            min_estimates = min_perf["data"].get("estimate", [])
-            for e in sorted(min_estimates, key=lambda x: x.get('bid', 0)):
-                if e.get('clicks', 0) > 0:
-                    min_bid = e.get('bid', 0)
-                    lines.append(f"💡 추천: 최소 {format_number(min_bid)}원부터 시작")
-                    break
+        return "\n".join(lines)
     
-    lines.append("")
-    lines.append("━━━━━━━━━━━━━━")
-    lines.append("")
-    lines.append("※ 다른 입찰가 테스트: '광고 " + keyword_name + "'")
-    
-    return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"❌ get_ad_cost_custom 전체 오류: {str(e)}", exc_info=True)
+        return f"❌ 오류 발생\n\n키워드: {keyword}\n입찰가: {user_bid}원\n\n잠시 후 다시 시도해주세요."
 
 #############################################
 # 기본 기능: 자동완성어
@@ -1551,21 +1617,22 @@ def kakao_skill():
     try:
         request_data = request.get_json()
         if request_data is None:
+            logger.error("❌ 요청 데이터 None")
             return create_kakao_response("요청 데이터 오류")
         
         user_id = request_data.get("userRequest", {}).get("user", {}).get("id", "unknown")
         user_utterance = request_data.get("userRequest", {}).get("utterance", "").strip()
+        
+        logger.info(f"📥 요청 - 사용자: {user_id} / 입력: '{user_utterance}'")
         
         if not user_utterance:
             return create_kakao_response("명령어를 입력해주세요!\n\n'도움말' 입력")
         
         lower_input = user_utterance.lower()
         
-        # 도움말
         if lower_input in ["도움말", "도움", "사용법", "help", "?"]:
             return create_kakao_response(get_help())
         
-        # 운세
         if lower_input.startswith("운세 "):
             birthdate = ''.join(filter(str.isdigit, user_utterance))
             if birthdate and len(birthdate) in [6, 8]:
@@ -1575,11 +1642,9 @@ def kakao_skill():
         if lower_input in ["운세", "오늘운세"]:
             return create_kakao_response(get_fortune())
         
-        # 로또
         if lower_input in ["로또", "로또번호"]:
             return create_kakao_response(get_lotto())
         
-        # 비교
         if lower_input.startswith("비교 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
@@ -1587,28 +1652,24 @@ def kakao_skill():
                 return create_kakao_comparison_response(keyword, analysis)
             return create_kakao_response("예) 비교 부평맛집")
         
-        # 유튜브
         if lower_input.startswith("유튜브 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
                 return create_kakao_response(get_youtube_autocomplete(keyword))
             return create_kakao_response("예) 유튜브 부평맛집")
         
-        # 자동완성
         if lower_input.startswith("자동 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if keyword:
                 return create_kakao_response(get_autocomplete(keyword))
             return create_kakao_response("예) 자동 부평맛집")
         
-        # 대표키워드
         if lower_input.startswith("대표 "):
             input_text = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             if input_text:
                 return create_kakao_response(format_place_keywords(input_text))
             return create_kakao_response("예) 대표 1234567890")
         
-        # 연관키워드
         if lower_input.startswith("연관 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1616,11 +1677,6 @@ def kakao_skill():
                 return create_kakao_response(get_related_keywords(keyword))
             return create_kakao_response("예) 연관 부평맛집")
         
-        #############################################
-        # 광고 기능 - 3가지 선택 (세션 기반)
-        #############################################
-        
-        # 1단계: "광고 부평맛집" → 선택지 제공
         if lower_input.startswith("광고 "):
             keyword = user_utterance.split(" ", 1)[1].strip() if " " in user_utterance else ""
             keyword = clean_keyword(keyword)
@@ -1628,7 +1684,6 @@ def kakao_skill():
             if not keyword:
                 return create_kakao_response("예) 광고 부평맛집")
             
-            # 세션에 키워드 저장
             user_sessions[user_id] = {
                 "state": "waiting_for_ad_choice",
                 "keyword": keyword,
@@ -1637,42 +1692,35 @@ def kakao_skill():
             
             logger.info(f"🎯 광고 1단계: {keyword} (사용자: {user_id})")
             
-            # 3가지 선택지 제공
             return create_kakao_response(
                 f"[{keyword}] 광고 분석\n\n"
                 f"분석 방식을 선택하세요:\n\n"
-                f"A. 숫자 입력 (예: 3000)\n"
+                f"1️⃣ 숫자 입력 (예: 3000)\n"
                 f"   → 맞춤 성과 분석\n\n"
-                f"B. 전체\n"
+                f"2️⃣ 전체\n"
                 f"   → 종합 광고 분석\n\n"
-                f"C. 순위\n"
+                f"3️⃣ 순위\n"
                 f"   → 실시간 순위별 입찰가"
             )
         
-        # 2단계: 선택 처리
         if user_id in user_sessions and user_sessions[user_id].get("state") == "waiting_for_ad_choice":
             session = user_sessions[user_id]
             keyword = session["keyword"]
             
-            # 세션 타임아웃 체크 (5분)
             if time.time() - session.get("timestamp", 0) > 300:
                 del user_sessions[user_id]
                 return create_kakao_response("세션이 만료되었습니다.\n\n다시 '광고 키워드'를 입력해주세요.")
             
-            # 세션 삭제
             del user_sessions[user_id]
             
-            # 2-1: "순위" 입력 → 순위별 입찰가 ⭐ 우선순위 변경
             if lower_input == "순위":
                 logger.info(f"🎯 광고 2단계(순위): {keyword}")
                 return create_kakao_response(format_real_rank_bids(keyword))
             
-            # 2-2: "전체" → 종합 분석
             elif lower_input == "전체":
                 logger.info(f"🎯 광고 2단계(전체): {keyword}")
                 return create_kakao_response(get_ad_cost_full(keyword))
             
-            # 2-3: 숫자 입력 → 맞춤 분석
             else:
                 bid_input = ''.join(filter(str.isdigit, user_utterance))
                 
@@ -1681,7 +1729,6 @@ def kakao_skill():
                     
                     logger.info(f"🎯 광고 2단계(맞춤): {keyword} / {user_bid}원")
                     
-                    # 입찰가 검증
                     if user_bid < 70:
                         user_sessions[user_id] = session
                         return create_kakao_response("입찰가는 최소 70원 이상이어야 합니다.\n\n다시 입력해주세요.")
@@ -1690,10 +1737,8 @@ def kakao_skill():
                         user_sessions[user_id] = session
                         return create_kakao_response("입찰가는 100,000원 이하로 입력해주세요.\n\n다시 입력해주세요.")
                     
-                    # 맞춤 분석 실행
                     return create_kakao_response(get_ad_cost_custom(keyword, user_bid))
                 
-                # 잘못된 입력
                 else:
                     user_sessions[user_id] = session
                     return create_kakao_response(
@@ -1703,11 +1748,6 @@ def kakao_skill():
                         "• 순위"
                     )
         
-        #############################################
-        # ⭐ 세션 없이 "순위" 또는 숫자만 입력한 경우 처리
-        #############################################
-        
-        # 세션 없이 "순위" 입력 → 안내 메시지
         if lower_input == "순위":
             return create_kakao_response(
                 "⚠️ 먼저 키워드를 입력해주세요.\n\n"
@@ -1715,7 +1755,6 @@ def kakao_skill():
                 "→ 선택지에서 '순위' 선택"
             )
         
-        # 세션 없이 숫자만 입력 → 안내 메시지
         if user_utterance.isdigit():
             return create_kakao_response(
                 "⚠️ 먼저 키워드를 입력해주세요.\n\n"
@@ -1723,9 +1762,6 @@ def kakao_skill():
                 "→ 입찰가 입력"
             )
         
-        #############################################
-        # 기본: 검색량
-        #############################################
         keyword = user_utterance.strip()
         if "," in keyword:
             return create_kakao_response(get_search_volume(keyword))
@@ -1733,9 +1769,8 @@ def kakao_skill():
             return create_kakao_response(get_search_volume(clean_keyword(keyword)))
         
     except Exception as e:
-        logger.error(f"스킬 오류: {str(e)}")
-        logger.error(f"스택 트레이스:", exc_info=True)
-        return create_kakao_response("오류 발생\n잠시 후 다시 시도해주세요.")
+        logger.error(f"❌ 스킬 최상위 오류: {str(e)}", exc_info=True)
+        return create_kakao_response("오류 발생\n\n잠시 후 다시 시도해주세요.")
 
 def create_kakao_response(text):
     """카카오 스킬 기본 응답 생성"""
@@ -1825,6 +1860,38 @@ def test_custom():
 <h2>📊 맞춤 분석: {keyword} / {bid}원</h2>
 <hr>
 <pre style="background:#e8f5e9; padding:20px; white-space:pre-wrap;">{result}</pre>
+</body></html>"""
+    
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+@app.route('/test/full')
+def test_full():
+    """전체 분석 테스트"""
+    keyword = request.args.get('q', '강남맛집')
+    
+    result = get_ad_cost_full(keyword)
+    
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>전체 분석 테스트</title></head>
+<body style="font-family:Arial; max-width:900px; margin:50px auto; padding:20px;">
+<h2>📊 전체 분석: {keyword}</h2>
+<hr>
+<pre style="background:#e8f5e9; padding:20px; white-space:pre-wrap;">{result}</pre>
+</body></html>"""
+    
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+@app.route('/test/session')
+def test_session():
+    """세션 확인"""
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>세션 확인</title></head>
+<body style="font-family:Arial; max-width:900px; margin:50px auto; padding:20px;">
+<h2>📋 현재 세션</h2>
+<pre style="background:#f5f5f5; padding:20px;">{json.dumps(user_sessions, ensure_ascii=False, indent=2, default=str)}</pre>
+<hr>
+<h2>📋 캐시</h2>
+<pre style="background:#fff3e0; padding:20px;">{json.dumps({k: str(v[1]) for k, v in api_cache.items()}, ensure_ascii=False, indent=2)}</pre>
 </body></html>"""
     
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
