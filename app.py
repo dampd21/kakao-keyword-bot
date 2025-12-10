@@ -1753,13 +1753,14 @@ def kakao_skill():
             return create_kakao_response(
                 f"[{keyword}] 광고 분석\n\n"
                 f"분석 방식을 선택하세요:\n\n"
-                f"A. "숫자" 입력 (예: 3000)\n"
+                f"A. \"숫자\" 입력 (예: 3000)\n"
                 f"   → 맞춤 성과 분석\n\n"
-                f"B. "전체" 입력 (예: 전체)\n"
+                f"B. \"전체\" 입력 (예: 전체)\n"
                 f"   → 종합 광고 분석\n\n"
-                f"C. "순위" 입력 (예: 순위)\n"
+                f"C. \"순위\" 입력 (예: 순위)\n"
                 f"   → 실시간 순위별 입찰가"
             )
+            
         
         if user_id in user_sessions and user_sessions[user_id].get("state") == "waiting_for_ad_choice":
             session = user_sessions[user_id]
