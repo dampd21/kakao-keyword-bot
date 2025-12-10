@@ -1,0 +1,19 @@
+name: Keep Alive
+
+on:
+  schedule:
+    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Health
+        run: curl -s https://kakao-keyword-bot.onrender.com/health || true
+      
+      - name: Ping Alive
+        run: curl -s https://kakao-keyword-bot.onrender.com/alive || true
+      
+      - name: Ping Root
+        run: curl -s https://kakao-keyword-bot.onrender.com/ || true
