@@ -1772,7 +1772,7 @@ def kakao_skill():
             del user_sessions[user_id]
             
             if lower_input == "순위":
-                logger.info(f("🎯 광고 2단계(순위): {keyword}")
+                logger.info(f"🎯 광고 2단계(순위): {keyword}")
                 return create_kakao_response(format_real_rank_bids(keyword))
             
             elif lower_input == "전체":
@@ -1841,6 +1841,24 @@ def create_kakao_response(text):
         }
     })
 
+#############################################
+# 헬스체크 엔드포인트 (슬립 방지)
+#############################################
+@app.route('/health')
+def health():
+    """UptimeRobot용"""
+    return "OK", 200
+
+@app.route('/ping')
+def ping():
+    """cron-job.org용"""
+    return "PONG", 200
+
+@app.route('/alive')
+def alive():
+    """Hetrix Tools용"""
+    return "ALIVE", 200
+    
 #############################################
 # 테스트 라우트
 #############################################
